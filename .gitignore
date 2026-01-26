@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+
+output_images/
+Old Outputs/
+transformed_train_images/
+finetuned_vae/
+data/
+batched_data/
+
+.venv/
+
+*.lock
+*.png
+*.pt
+*.pth
+*.ckpt
+*.zip
+*.tar
+*.npz
+*.npy

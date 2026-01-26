@@ -1,0 +1,145 @@
+import torch
+from torch.utils.data import DataLoader,Dataset
+from torchvision import transforms
+from diffusers import AutoencoderKL, VQModel
+from tqdm import tqdm
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+
+class VAEFineTuner:
+
+    def __init__(self, model_name='stabilityai/sd-vae-ft-mse',train_loader=None,test_loader=None,device=None):
+        """
+        Initialize VAE model
+        
+        Args:
+            model_name: HuggingFace model identifier
+                - "stabilityai/sd-vae-ft-mse" (recommended, MSE finetuned)
+                - "stabilityai/sd-vae-ft-ema" (EMA finetuned)
+            device: torch device
+        """
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.vae = AutoencoderKL.from_pretrained(model_name)
+        self.vae.to(self.device)
+        print(f"Model parameters: {sum(p.numel() for p in self.vae.parameters()):,}")
+            
+    
+    def finetune(self,train_loader,test_loader,epochs=50, lr=0.0001,kl_weight = 1e-6,save_path = "./finetuned_vae"):
+        
+        optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr, weight_decay=1e-4)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+        mse_loss = torch.nn.MSELoss()
+        best_loss = float('inf')
+
+        for epoch in range(epochs):
+
+            self.vae.train()
+            train_loss =0
+            train_recon_loss =0
+            train_kl_loss = 0
+            progress_bar = tqdm(train_loader, desc=f'Epochs {epoch+1}/{epochs}')
+            for batch,images in enumerate(progress_bar):
+
+                if self.multi_image_mode:
+                    
+                    # Convert the (Batch, Num_of_images, Channels, Height, Weight) where Num_of_images is the images to be averaged
+                    batch_size, num_imgs = images.shape[0], images.shape[1]
+                    print('The batch_size ')
+
+
+
+
+
+                images = images.to(self.device)
+
+                posterior = self.vae.encode(images).latent_dist
+                z = posterior.sample()
+                reconstructed = self.vae.decode(z).sample
+                if batch == 0:
+                    self.visulaize_images(batch, reconstructed,images,'.\\output_images\\',False)
+
+                reconstruction_loss = mse_loss(reconstructed,images)
+                kl_loss = posterior.kl().mean()
+                loss = reconstruction_loss + kl_weight * kl_loss
+
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 1.0)
+                optimizer.step()
+
+                train_loss += loss.item()
+                train_recon_loss += reconstruction_loss.item()
+                train_kl_loss += kl_loss.item()
+
+                progress_bar.set_postfix({
+                    'loss': loss.item(),
+                    'recon': reconstruction_loss.item(),
+                    'kl': kl_loss.item()
+                })
+            
+            scheduler.step()
+
+            test_loss =0
+            if test_loader:
+                self.vae.eval()
+                with torch.no_grad():
+                    for batch,images in enumerate(test_loader):
+                        images = images.to(self.device)
+                        posterior = self.vae.encode(images).latent_dist
+                        z=posterior.sample()
+                        reconstructed = self.vae.decode(z).sample
+                        recon_loss = mse_loss(reconstructed,images)
+                        kl_loss = posterior.kl().mean()
+                        loss = recon_loss + kl_weight*kl_loss
+                        test_loss += loss.item()
+                        if batch == 0:
+                            self.visulaize_images(batch, reconstructed,images,'.\\output_images\\test_images\\',True)
+                
+                test_loss /= len(test_loader)
+                print(f"Epoch {epoch+1}: Train Loss: {train_loss/len(train_loader):.4f}, Val Loss: {test_loss:.4f}")
+
+                if test_loss < best_loss:
+                    best_loss = test_loss
+                    self.vae.save_pretrained(save_path)
+                    print(f"Saved best model with val loss: {test_loss:.4f}")
+            
+            else:
+                print(f"Epoch {epoch+1}: Train Loss: {train_loss/len(train_loader):.4f}")
+
+    def visulaize_images(self,batch,reconstructed_image,original, save_path,test =False):
+        reconstructed_image = torch.clamp(reconstructed_image,0,1)
+        for i in range(len(reconstructed_image)):
+            if test:
+                plt.imsave(os.path.join(save_path,f'output_test_images_{batch}_{i}.png'),reconstructed_image[i].permute(1,2,0).detach().cpu().numpy())
+            else:
+                plt.imsave(os.path.join(save_path,f'output_images_{batch}_{i}.png'),reconstructed_image[i].permute(1,2,0).detach().cpu().numpy())
+
+        if batch == 0:
+            # Create figure
+            fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+            for i in range(4):
+                #Original Image
+                orig_img = original[i].permute(1, 2, 0).detach().cpu().numpy()
+                axes[0, i].imshow(orig_img)
+                axes[0, i].set_title(f'Original {i+1}')
+                axes[0, i].axis('off')
+
+                #Reconstruction Images
+                recon_images = reconstructed_image[i].permute(1,2,0).detach().cpu().numpy()
+                axes[1,i].imshow(recon_images)
+                axes[1,i].set_title(f'Recon {i+1}')
+                axes[1,i].axis('off')
+
+            plt.tight_layout()
+            plt.savefig(f'./output_images/test_images/reconstruction_test_{batch}.png', dpi=150)
+            plt.close()
+    
+
+
+
+
+
+
