@@ -60,7 +60,7 @@ class VQVAEFineTuner:
     def __init__(self, model_name="stabilityai/sd-vae-ft-mse",prebatched_images=False,device=None):
         
         self.device = device if device else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.vqvae = VQModel.from_pretrained(model_name,ignore_mismatched_sizes=True,low_cpu_mem_usage=False)
+        self.vqvae =  AutoencoderKL.from_pretrained(model_name)
         self.vqvae.to(self.device)
         summary(self.vqvae, input_size = (4,3,256,256))
         self.prebatched_images = prebatched_images

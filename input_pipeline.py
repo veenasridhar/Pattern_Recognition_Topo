@@ -65,6 +65,18 @@ def input_pipeline():
         #v2.Normalize(mean=(0.5,), std= (1.0,)),
     ])
 
+     #Elastic Transform check
+    '''elastic_transform = v2.ElasticTransform(alpha=50.0)
+    blurrer = v2.GaussianBlur(kernel_size=(3,3),sigma=(3,5))
+    image = torchvision.io.decode_image('./batched_data/train/Batch 4/image0.png')
+    #transformed_imgs = elastic_transform(image)
+    transformed_imgs = blurrer(image)
+    transformed_imgs = transformed_imgs.permute(1,2,0).numpy()
+    print(transformed_imgs.shape, type(transformed_imgs))
+    cv2.imshow('Transformed Image',transformed_imgs)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()'''
+
     #Create a Dataset
     train_dataset = SimpleCustomBatch(image_directory=train_images,transform=train_transformations)
     #train_subset = torch.utils.data.Subset(train_dataset,range(10))

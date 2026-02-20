@@ -1,3 +1,5 @@
+Train Batches
+
 Side View MW				- 16 images
 1. Batch 1
 2. Batch 2
@@ -61,6 +63,102 @@ AnoWas_V4_bottom			-36 images
 36. Batch_d (remaining 2) + Batch_e (last 3)
 
 AnoWas_V4_Side View			-36 items
+37. Batch_aa (4 images + last image from Batch_bb)
+38. Batch_bb (First 5 images)
+39. Batch_cc (First 5 images)
+40. Batch_cc (Last 2 images (19,21) + first 3 images)
+41. Batch_dd (First 5 images)
+42. Batch_dd (Last 4 images + First image)
+43. Batch_ee (First 5 images)
+44. Batch_ee (Last 5 images)
+
+AnoWas_V4_top				-35 images
+45. Batch_aaa
+46. Batch_bbb (First 5 images)
+47. Batch_ccc (First 5 images)
+48. Batch_ccc (Next 5 images)
+49. Batch_ddd
+50. Batch_eee
+51. Batch_fff (2 images + last 2 from Batch_ccc + last image from Batch_bbb)
+
+gen-WK_Front
+51. Batch_aa (First 4 images and Batch_bb 1st image)
+52. Batch_bb (All 5 images)
+53. Batch_cc (First 4 images and 1 image from Batch_aa)
+54. Batch_dd (3 images and 2 images from Batch_cc)
+55. Batch_ee (first 5 images)
+56. Batch_ee (last 3 images and first 2 images from Batch_ee)
+57. Batch_ff (All 5 images)
+58. Batch_ee + Batch_ff (3 images from ee and 2 images from ff)
+59. Batch_cc + Batch_bb (3 images and 2 images)
+60. Batch_ee + Batch_ff (2 images and 3 images)
+
+gen-WK_Side
+61. Batch_aaa (All 5 images)
+62. Batch_bbb (4 images + 1 copy from the same batch)
+63. Batch_ccc (First 5 images)
+64. Batch_ccc (Last 3 images + last 2 images from Batch_aaa)
+65. Batch_ddd (First 5 images)
+66. Batch_ddd (Next 5 images)
+67. Batch_ddd (Next 5 images)
+68. Batch_ddd (Last image + First 2 images + 6th and 7th images)
+69. Batch_eee (First 5 images)
+70. Batch_eee (Last 4 images and the 5th image)
+71. Batch_fff (First 5 images)
+72. Batch_fff + Batch_eee (Last image + First 4 images from Batch_eee)
+73. Batch_fff (
+74.
+75.
+
+gen-WK_Top
+76. Batch_aaa (First 5 images)
+77. Batch_bbb (First 2 and last 3 images)
+78. Batch_bbb (Last 5 images)
+79. Batch_ccc (First 5 images)
+80. Batch_ccc (Last 2 images and first 3 images)
+81. Batch_ddd (First 5 images)
+82. Batch_ddd (Next 5 images)
+83. Batch_ddd (Last image + 8,9 images +  2nd and 4th image)
+84. Batch_eee (First 5 images)
+85. Batch_eee (Next 5 images)
+86. Batch_eee (Last 5 images)
+
+gen-WK_Bottom
+87. Batch_a (4 images + 1 copy)
+88. Batch_b (3 images + first 2 images from Batch_c)
+89. Batch_c (Last 5 images)
+90. Batch_d (First 5 images)
+91. Batch_d (Last 5 images)
+92. Batch_d (4,5,6,7,8 images)
+93. Batch_e (First 5 images)
+94. Batch_e (Next 5 images)
+95. Batch_e (Next 5 images)
+96. Batch_e (Last 5 images)
+97. Batch_f (First 3 images + last 2 images of Batch_e)
+98. Batch_f (First 3 images + 29,30 from Batch_e)
+
+
+99.
+100.
+
+Test Batches
+
+1. Jeremias_Serie_1_bottom
+2. Jeremias_Series_3_side (First 5 images)
+3. Jeremias_series_4_side (First 5 images)
+4. V3_Side (Batch 7 first 2 images, Batch 9 images)
+5. Jeremias_Series_4_side (Last 3 images + first 2 images)
+6. Anowas_V4_Side_View (3 images from Batch bb + 2 images from Batch_cc)
+7. Anowas_V4_Side_View (First 3 and last 2 images from Batch_dd)
+8. Anowas_V4_Side_View (First 3 and last 2 images from Batch_ee)
+9. Jeremias_series_4_bottom (First 5 images)
+10. MW Rear View (First 3 and 2 random images (34,09) from the same batch)
+
+
+New Batch Ideas
+
+Create a new batch from Batch 8 and 9
+
 
 
 

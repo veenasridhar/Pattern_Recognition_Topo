@@ -19,3 +19,7 @@ batched_data/
 *.tar
 *.npz
 *.npy
+*.docx
+*.txt
+*.tmp
+*.json
