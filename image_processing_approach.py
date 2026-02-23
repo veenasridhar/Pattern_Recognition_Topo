@@ -129,10 +129,13 @@ def image_averaging(raw_images,batch):
     cv2.destroyAllWindows()
 
     extracted_structures = np.zeros_like(avg_image)
+    white_mask = np.all(avg_image==1,axis=-1)
+    print(white_mask.shape)
     print('Shape of extractedh structures',extracted_structures.shape)
     #extracted_structures[threshold_mask == 0] = avg_image[threshold_mask == 0] # To get a original colors 
     extracted_structures[threshold_mask == 0] = [0,0,1]
     extracted_structures[threshold_mask == 1] = [0.64, 0.64, 0.64]
+    extracted_structures[white_mask] = [1,1,1]
 
     cv2.imshow('Extracted Structures', extracted_structures)
     cv2.waitKey(0)

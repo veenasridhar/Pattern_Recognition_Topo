@@ -13,16 +13,16 @@ def main():
     #debatching('./batched_data/unprocessed',preprocessing=True)
 
     #Getting Red and orange masks from the images.
-    '''image_directory = './batched_data/test'
+    '''image_directory = './batched_data/train'
     for batch_id,batch in enumerate(os.listdir(image_directory)):
         images = []
-        #if int(batch[-2:]) == 61:
+        if int(batch[-2:]) == 44:
             #print(batch[-2:])
-        for image in os.listdir(os.path.join(image_directory,batch)):
-            #print(os.path.join(image_directory,batch,image))
-            images.append(cv2.imread(os.path.join(image_directory,batch,image)))
-        print(len(images))
-        get_red_orange_masks(images,batch)'''
+            for image in os.listdir(os.path.join(image_directory,batch)):
+                #print(os.path.join(image_directory,batch,image))
+                images.append(cv2.imread(os.path.join(image_directory,batch,image)))
+            print(len(images))
+            get_red_orange_masks(images,batch)'''
 
     
     #Sanity Check on created continous masks
@@ -41,10 +41,10 @@ def main():
     #     batch_directory = './batched_data_red_orange/Batch 4'
     #     create_ground_truth(batch_directory,'Batch 4')
 
-    '''batch_directory = './batched_data_red_orange/test'
-    #batches = 'Batch 50'
-    for batches in os.listdir(batch_directory):
-        create_ground_truth(os.path.join(batch_directory,batches),batches)'''
+    '''batch_directory = './batched_data_red_orange/train'
+    batches = 'Batch 43'
+    #for batches in os.listdir(batch_directory):
+    create_ground_truth(os.path.join(batch_directory,batches),batches)'''
     '''for images in os.listdir(batch_directory):
         image_stack.append(cv2.imread(os.path.join(batch_directory,images)))'''
     

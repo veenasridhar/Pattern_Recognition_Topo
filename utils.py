@@ -100,11 +100,11 @@ def get_red_orange_masks(raw_images,batch):
 
 
 
-        if os.path.isdir(os.path.join('./batched_data_red_orange/test',batch)):
-            cv2.imwrite(os.path.join('./batched_data_red_orange/test',batch,f'image_{index}.png'),colored_mask)
+        if os.path.isdir(os.path.join('./batched_data_red_orange/train','Batch 43')):
+            cv2.imwrite(os.path.join('./batched_data_red_orange/train','Batch 43',f'image_{index}.png'),colored_mask)
         else:
-            os.mkdir(os.path.join('./batched_data_red_orange/test',batch))
-            cv2.imwrite(os.path.join('./batched_data_red_orange/test',batch,f'image_{index}.png'),colored_mask)
+            os.mkdir(os.path.join('./batched_data_red_orange/train','Batch 43'))
+            cv2.imwrite(os.path.join('./batched_data_red_orange/train','Batch 43',f'image_{index}.png'),colored_mask)
 
         '''coords_of_interest = np.where(mask_red == 255)
         # White → Red

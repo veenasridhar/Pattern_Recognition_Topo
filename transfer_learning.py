@@ -38,7 +38,8 @@ class PreBatchedImageDataset(Dataset):
     def __getitem__(self,index):
 
         image_paths = self.image_groups[index]
-        
+        if index > 71:
+            index +=4
         gt_image = None
         if self.gt_directory:
             gt_image = torchvision.io.decode_image(os.path.join(self.gt_directory,f'gt {index}.png'),torchvision.io.ImageReadMode.RGB)
@@ -124,7 +125,7 @@ class VAEFineTuner:
         image_groups = create_image_groups(image_directory)
 
         train_dataset = PreBatchedImageDataset(image_groups=image_groups,gt_directory = gt_directory,transform=train_transformations)
-
+        print("The length of train dataset",len(train_dataset))
         train_dataloader = DataLoader(train_dataset,batch_size=2,num_workers=2,pin_memory=True)
 
         test_dataset = PreBatchedImageDataset(image_groups=image_groups,gt_directory = gt_directory,transform=test_transformations)
@@ -270,7 +271,8 @@ class VAEFineTuner:
                             z_all = z_all.reshape(batch_size,num_imgs,*z_all.shape[1:]) # Reshaping back into (B,N,C,H,W)
                             z_averaged = z_all.mean(dim=1)
                             reconstructed = self.vae.decode(z_averaged).sample
-                            
+                            target = labels
+                            target = target.to(self.device)
                             #target = images.mean(dim=1).to(self.device)
                             self.visulaize_images(batch, epoch,reconstructed,images,target,'.\\output_images\\test_images\\',True)
                             print('The shape of target', target.shape)
