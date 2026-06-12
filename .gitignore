@@ -1,0 +1,32 @@
+data/
+wandb/
+*.npy
+*.png
+*.pth
+__pycache__/
+.idea/
+venv/
+/Compiled Results/
+/data/
+/eval_images_result/
+/feature_map/
+/finetuned_vae/
+/Image Processing Results/
+/Individual Reconstruction Results/
+/Latent_averaging_Results/
+/models/
+/output_files/
+/output_images_0/
+/Resdiual Convolutional Network Results/
+/Residual Conv Grayscale/
+/Residual Convolutional Network Results/
+/Residual Convolutional Network Results_1/
+/Residual Convolutional Network Results_25px reception field/
+/Residual Convolutional Network Results_only_sdf/
+/Residual Convolutional Network Results_sdf/
+/Results - Grayscale Images/
+/Results on 09-06/
+/Simple Convolutional Network Results/
+/Simple_Conv_Grayscale_output/
+/Simple_Conv_Grayscale_output_permuted/
+/Spatial Aggregation Results/
