@@ -26,13 +26,13 @@ class AttSets(nn.Module):
             #nn.Sigmoid()
         )
 
-    def forward(self,input_latents,num_imgs=5,batch_size=2):
+    def forward(self,input_latents,num_imgs=5,batch_size=batch_size):
 
         '''Method-1
         This method weights individual images separately (sigmoid activations) and multiplies with its own input latent representations before going through the aggregation
          Finally for aggregation it sums it along the first dimension in (B,N,C,H,W) i.e along the number of images in each batch.'''
 
-        print('The shape of the input latents',input_latents.shape)
+        #print('The shape of the input latents',input_latents.shape)
 
         scores = self.score_net(input_latents)  # Size = (B*N,C,H,W)
 

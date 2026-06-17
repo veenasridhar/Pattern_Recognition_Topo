@@ -30,3 +30,6 @@ venv/
 /Simple_Conv_Grayscale_output/
 /Simple_Conv_Grayscale_output_permuted/
 /Spatial Aggregation Results/
+/Skeletons_gt/
+/Results 15-06/
+/Residual Convolutional Network Results_1000/

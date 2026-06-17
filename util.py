@@ -29,29 +29,33 @@ def convert_to_sdf(batch_dir,batch):
         #for batch in os.listdir(f'data/Final Data/batched_data_grayscale_resized/{set}'):
 
             batch = ''
-            for image_path in os.listdir(os.path.join(f'data/Final Data/Image Processing Results Grayscale/{set}', batch)):
-                index = (image_path.split('.')[0]).split('_')[-1]
+            for image_path in os.listdir(os.path.join(f'data/Final Data/gt_grayscale_resized/{set}', batch)):
+                index = (image_path.split('.')[0]).split(' ')[-1]
                 print(index)
-                image = cv2.imread(os.path.join(f'data/Final Data/Image Processing Results Grayscale/{set}', batch, image_path),cv2.IMREAD_GRAYSCALE)
-                image = image/255.0
-                image_labels = convert_labels(image)
-                un_normalised_sdf = sdf_distance_function(image_labels)
-                normalised_sdf = np.zeros_like(un_normalised_sdf, dtype=np.float32)
-                pos_mask = un_normalised_sdf > 0
-                neg_mask = un_normalised_sdf < 0
-                normalised_sdf[pos_mask] = un_normalised_sdf[pos_mask] / global_pos_max
-                normalised_sdf[neg_mask] = un_normalised_sdf[neg_mask] / abs(global_neg_min)   # Important as negative and negative cancels out
-                if not os.path.exists(os.path.join(f'data/Final Data/image_processing_data_sdf/{set}',batch)):
-                    os.mkdir(os.path.join(f'data/Final Data/image_processing_data_sdf/{set}',batch))
-                if not os.path.exists(os.path.join(f'data/Final Data/image_processing_data_sdf/vis/{set}', batch)):
-                    os.mkdir(os.path.join(f'data/Final Data/image_processing_data_sdf/vis/{set}', batch))
-                np.save(os.path.join(f'data/Final Data/image_processing_data_sdf/{set}',batch,f'image_{index}.npy' ), normalised_sdf)
-                fig, ax = plt.subplots(figsize=(6, 6))
-                im = ax.imshow(normalised_sdf, cmap='RdBu', vmin=-1, vmax=1)
-                fig.colorbar(im, ax=ax, label='normalized signed distance')
-                ax.axis('off')
-                fig.savefig(os.path.join(f'data/Final Data/image_processing_data_sdf/vis/{set}', batch,f'image_{index}.png'), dpi=150, bbox_inches='tight')
-                plt.close(fig)
+                if int(index) == 9:
+                    print('Processing ',image_path)
+                    image = cv2.imread(os.path.join(f'data/Final Data/gt_grayscale_resized/{set}', batch, image_path),cv2.IMREAD_GRAYSCALE)
+                    image = image/255.0
+                    image_labels = convert_labels(image)
+                    un_normalised_sdf = sdf_distance_function(image_labels)
+                    normalised_sdf = np.zeros_like(un_normalised_sdf, dtype=np.float32)
+                    pos_mask = un_normalised_sdf > 0
+                    neg_mask = un_normalised_sdf < 0
+                    normalised_sdf[pos_mask] = un_normalised_sdf[pos_mask] / global_pos_max
+                    normalised_sdf[neg_mask] = un_normalised_sdf[neg_mask] / abs(global_neg_min)   # Important as negative and negative cancels out
+                    visualise_sdf(image_labels, image_labels, neg_mask, pos_mask, un_normalised_sdf, normalised_sdf)
+
+                    if not os.path.exists(os.path.join(f'data/Final Data/gt_data_sdf/{set}',batch)):
+                        os.mkdir(os.path.join(f'data/Final Data/gt_data_sdf/{set}',batch))
+                    if not os.path.exists(os.path.join(f'data/Final Data/gt_data_sdf/vis/{set}', batch)):
+                        os.mkdir(os.path.join(f'data/Final Data/gt_data_sdf/vis/{set}', batch))
+                    np.save(os.path.join(f'data/Final Data/gt_data_sdf/{set}',batch,f'image_{index}.npy' ), normalised_sdf)
+                    fig, ax = plt.subplots(figsize=(6, 6))
+                    im = ax.imshow(normalised_sdf, cmap='RdBu', vmin=-1, vmax=1)
+                    fig.colorbar(im, ax=ax, label='normalized signed distance')
+                    ax.axis('off')
+                    fig.savefig(os.path.join(f'data/Final Data/gt_data_sdf/vis/{set}', batch,f'image_{index}.png'), dpi=150, bbox_inches='tight')
+                    plt.close(fig)
 
 
 
@@ -113,12 +117,12 @@ def sdf_distance_function(label_map,num_classes=1):
     #
     # print(pos_max,neg_min)
 
-    #visualise_sdf(label_map, mask, distance_inside, distance_outside, sdf, normalized)
+    #visualise_sdf(label_map, mask, distance_inside, distance_outside, sdf, normalized=None)
 
     # boundary stays 0
     return sdf
 
-#convert_to_sdf('data/Final Data/batched_data_grayscale_resized/train',0)
+
 def visualise_sdf(label_map,mask,dist_in,dist_out,raw_sdf,normalized):
     fig, axes = plt.subplots(2, 3, figsize=(14, 8))
     fig.suptitle('SDF Step by Step', fontsize=14)
@@ -147,13 +151,15 @@ def visualise_sdf(label_map,mask,dist_in,dist_out,raw_sdf,normalized):
 
     # 5. Raw SDF
     vmax = max(abs(raw_sdf.min()), abs(raw_sdf.max()))
-    im = axes[1, 1].imshow(raw_sdf, cmap='RdBu', vmin=-vmax, vmax=vmax)
+    im = axes[1, 1].imshow(raw_sdf, cmap='seismic', vmin=-vmax, vmax=vmax)
+    axes[1,1].contour(raw_sdf, levels=[0], colors="k", linewidths=1)
     axes[1, 1].set_title('Raw SDF\n(red=inside +, blue=outside -)')
     axes[1, 1].axis('off')
     plt.colorbar(im, ax=axes[1, 1], fraction=0.046)
 
     # 6. Normalized SDF
-    im = axes[1, 2].imshow(normalized, cmap='RdBu', vmin=-1, vmax=1)
+    im = axes[1, 2].imshow(normalized, cmap='seismic', vmin=-1, vmax=1)
+    axes[1, 2].contour(normalized, levels=[0], colors="k", linewidths=1)
     axes[1, 2].set_title('Normalized SDF [-1, +1]\n(red=inside, blue=outside, white=boundary)')
     axes[1, 2].axis('off')
     plt.colorbar(im, ax=axes[1, 2], fraction=0.046)
@@ -171,7 +177,7 @@ def visualise_sdf(label_map,mask,dist_in,dist_out,raw_sdf,normalized):
     print(f"  Outside pixels: {(~mask).sum()}")
     print(f"  Boundary pixels (SDF=0): {(raw_sdf == 0).sum()}")
 
-#convert_to_sdf('data/Final Data/batched_data_grayscale_resized/train',batch)
+#convert_to_sdf('data/Final Data/batched_data_grayscale_original size/test',batch=0)
 #
 # for gt in os.listdir('data/Final Data/gt_grayscale_resized/test'):
 #     index = (gt.split('.')[0]).split(' ')[-1]

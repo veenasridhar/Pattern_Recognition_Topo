@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import matplotlib.pyplot as plt
 
 class SoftSkeletonize(torch.nn.Module):
 
@@ -56,7 +57,7 @@ def dice_coeff(reconstructed, target):
     # cv2.waitKey(0)
     # cv2.destroyAllWindows()
     intersection = (reconstructed_white_areas * target_white_areas).sum(dim =(1,2))
-    print('Intersection: ', intersection)
+    #print('Intersection: ', intersection)
     union = (reconstructed_white_areas + target_white_areas).sum(dim =(1,2))
     smooth = 1e-6
     dice = 1 - ((2 * intersection + smooth) / (union + smooth)).mean()
@@ -68,23 +69,27 @@ class soft_dice_cldice(nn.Module):
         self.iter = iter_
         self.smooth = smooth
         self.alpha = alpha
-        self.soft_skeletonize = SoftSkeletonize(num_iters=3)
+        self.soft_skeletonize = SoftSkeletonize(num_iters=5)
         self.exclude_background = exclude_background
 
-    def forward(self, y_true, y_pred):
+    def forward(self, y_true, y_pred,index):
         if self.exclude_background:
             y_true = y_true[:, 2:, :, :]
             y_pred = y_pred[:, 2:, :, :]
         dice = dice_coeff(y_true, y_pred)
         skel_pred = self.soft_skeletonize(y_pred)
         print(skel_pred.shape)
-        # cv2.imshow('skel_pred',skel_pred[0].permute(1,2,0).cpu().numpy())
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
         skel_true = self.soft_skeletonize(y_true)
-        # cv2.imshow('skel_true', skel_true[0].permute(1,2,0).cpu().numpy())
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
+        fig, ax = plt.subplots(1,2,figsize=(10,5))
+
+        ax[0].imshow(skel_true[0].permute(1,2,0).detach().cpu().numpy())
+        ax[0].axis('off')
+
+        ax[1].imshow(skel_pred[0].permute(1,2,0).detach().cpu().numpy())
+        ax[1].axis('off')
+        plt.savefig(f'./Skeletons_gt/skeleton_{index}.png',)
+        plt.close()
+        # plt.show()
         tprec = (torch.sum(torch.multiply(skel_pred, y_true))+self.smooth)/(torch.sum(skel_pred)+self.smooth)
         tsens = (torch.sum(torch.multiply(skel_true, y_pred))+self.smooth)/(torch.sum(skel_true)+self.smooth)
         cl_dice = 1.- 2.0*(tprec*tsens)/(tprec+tsens)

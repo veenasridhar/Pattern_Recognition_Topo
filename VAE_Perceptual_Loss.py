@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import torchvision.models as models
 from visualizations import *
 #from attSets import AttSets
-from resnet_network import *
+from cldice_loss import *
 
 
 class VGGPerceptualLoss(nn.Module):
@@ -99,7 +99,7 @@ class VAEGANFineTuner:
         return minimum_dist
 
 
-    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=51, lr=0.0001, kl_weight=1e-6, latent_technique = 'averaging', save_path="./finetuned_vae"):
+    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=51, lr=0.0001, kl_weight=1e-6, latent_technique = 'attention_based', save_path="./finetuned_vae"):
 
         # Start a new wandb run to track this script.
         run = wandb.init(

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.morphology import binary_dilation
 from scipy.ndimage import distance_transform_edt
 import gudhi
-from resnet_network import *
+from cldice_loss import *
 from metrics import compute_betti_numbers
 
 
@@ -29,11 +29,11 @@ class simple_Conv(nn.Module):
         # self.output_layer = nn.Conv2d(16, 3, kernel_size=1)  # Output Channels is 3 for 3 classes in the labels.
 
         self.conv_layer1 = nn.Conv2d(in_channels, 16, kernel_size=3, stride=1, padding=1)  # 1st layer
-        self.conv_layer2 = nn.Conv2d(16, 32, kernel_size=7, stride=1, padding=3)
-        self.conv_layer3 = nn.Conv2d(32, 64, kernel_size=7, stride=1, padding=3)
-        self.conv_layer4 = nn.Conv2d(64, 32, kernel_size=5, stride=1, padding=2)
+        self.conv_layer2 = nn.Conv2d(16, 32, kernel_size=11, stride=1, padding=5)
+        self.conv_layer3 = nn.Conv2d(32, 64, kernel_size=11, stride=1, padding=5)
+        self.conv_layer4 = nn.Conv2d(64, 32, kernel_size=7, stride=1, padding=3)
         self.conv_layer5 = nn.Conv2d(32, 16, kernel_size=3, stride=1, padding=1)
-        self.output_layer = nn.Conv2d(16, 3, kernel_size=1)
+        self.output_layer = nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
 
         self.relu_layer = nn.ReLU()
         self.sdf_head = nn.Sequential(
@@ -50,8 +50,8 @@ class simple_Conv(nn.Module):
         conv_output = self.output_layer(x5)
         output = alpha * conv_output + avg_output
 
-        sdf_output = self.sdf_head(x5)
-        return output, sdf_output
+        #sdf_output = self.sdf_head(x5)
+        return output
 
 def sdf_distance_function(label_map,num_classes=3):
 
@@ -136,13 +136,13 @@ def topo_loss(pred_diagram, gt_diagram):
 def train_grayscale():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     k_fold = KFold(n_splits=5, shuffle=True)
-    batch_size=4
+    batch_size=1
     model = simple_Conv(5,3,kernel_size=3, stride=1, padding=1)
     model = model.to(device)
     # print(summary(model))
 
 
-    train_dataset, test_dataset = input_pipeline_residual_grayscale(single_image_reconstruction=False)
+    train_dataset, test_dataset = input_pipeline_original_size(single_image_reconstruction=False)
     train_indices = np.arange(len(train_dataset))
 
     for fold, (train_index, val_index) in enumerate(k_fold.split(train_indices)):
@@ -201,31 +201,33 @@ def train_grayscale():
             accum_steps = 4
             optimizer1.zero_grad()
 
-            for i,( images, labels,avg_output,sdf) in enumerate(train_dataloader):
+            for i,( images, labels,avg_output) in enumerate(train_dataloader):
 
                 images = images.to(device)
                 labels = labels.to(device)
                 avg_output = avg_output.to(device)
                 avg_output_classes = avg_output.squeeze(1)
-                print('Avg shape',avg_output.shape,'Avg Labels', avg_output.unique())
-                gt_sdf = sdf.to(device)
+                #print('Avg shape',avg_output.shape,'Avg Labels', avg_output.unique())
+                #gt_sdf = sdf.to(device)
                 labels = labels.squeeze(1)
                 avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                output_logits, sdf_pred  = model(images,avg_output_one_hot,alpha)
+                output_logits,  = model(images,avg_output_one_hot,alpha)
+                output_logits = output_logits.unsqueeze(0)
                 output_softmax = torch.softmax(output_logits, dim=1)
                 output = torch.argmax(output_logits,dim=1)                          # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
                 targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
                 targets_onehot = targets_onehot.permute(0, 3, 1, 2)  # (B, C, H, W)
                 targets_onehot = targets_onehot.float()  # scatter_ gives long by default
 
+
                 cross_entropy_loss = crossentropy_loss(output_logits, labels)
-                sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
+                #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                 #dice_loss = cl_dice(targets_onehot,output_softmax)
                 # visualise_softmax_prob(output_softmax)
                 # boundary_loss = sdf_loss(output_softmax,gt_sdf_white)
                 #loss = (1-alpha) * cross_entropy_loss_m1 + alpha * boundary_loss
-                loss = cross_entropy_loss + sdf_loss
+                loss = cross_entropy_loss
 
                 (loss/accum_steps).backward()
                 if (i + 1) % accum_steps == 0:
@@ -239,14 +241,12 @@ def train_grayscale():
 
                 train_loss += loss.item()
 
-
-
-
                 if epoch % 10 ==0:
                     if not os.path.exists(os.path.join(save_parent_dir,'train', 'Epoch '+str(epoch))):
                         os.mkdir(os.path.join(save_parent_dir,'train', 'Epoch '+str(epoch)))
                     if not os.path.exists(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map')):
                         os.mkdir(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map'))
+                    print(output.shape)
                     for i in range(len(output)):
                         #print('Unique Outputs',output.unique(return_counts=True), 'Unique Labels',labels.unique(return_counts=True))
                         # plt.imsave(f'{save_parent_dir}/train/Epoch {epoch}/label_{train_batch}.png', labels[i].cpu().detach().numpy(),cmap='gray',vmin=0,vmax=2)
@@ -257,18 +257,18 @@ def train_grayscale():
                         b0_img_prc, b1_img_prc = compute_betti_numbers(avg_output[i].squeeze(0))
                         b0_gt, b1_gt = compute_betti_numbers(labels[i])
                         betti_error_pred = abs(b0_pred - b0_gt) + abs(b1_pred - b1_gt)
-                        betti_error_img_prc = abs(b0_img_prc - b1_gt) + abs(b1_img_prc - b1_gt)
+                        betti_error_img_prc = abs(b0_img_prc - b0_gt) + abs(b1_img_prc - b1_gt)
                         iou,img_prc_iou =  visulaize_iou_metrics(raw_images=images[i], epoch=epoch, batch=train_batch, predicted_structures = output[i], gt = labels[i],image_processing_result=avg_output[i],betti_error_pred=betti_error_pred,betti_error_img_prc=betti_error_img_prc,save_path= f'{save_parent_dir}/train')
                         train_iou_dl += iou
                         train_iou_img_prc += img_prc_iou
-                        sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                        # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                        fig, ax = plt.subplots(figsize=(6, 5))
-                        im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
-                        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                        plt.savefig(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map',
-                                                 f'sdf_{train_batch}'))
-                        plt.close(fig)
+                        # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
+                        # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
+                        # fig, ax = plt.subplots(figsize=(6, 5))
+                        # im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
+                        # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                        # plt.savefig(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map',
+                        #                          f'sdf_{train_batch}'))
+                        # plt.close(fig)
                         train_batch += 1
 
 
@@ -287,23 +287,19 @@ def train_grayscale():
                     val_batch = 0
                     val_iou_dl = 0.0
                     val_iou_img_prc = 0.0
-                    if epoch < 250:  # For weighing ce_loss and sdf loss
-                        alpha = epoch / 250
-                    else:
-                        alpha = 1
 
-                    for images, labels, avg_output, sdf in val_dataloader:
+                    for images, labels, avg_output in val_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
                         avg_output = avg_output.to(device)
                         labels = labels.squeeze(1)
                         avg_output_classes = avg_output.squeeze(1)
-                        gt_sdf = sdf.to(device)
+                        #gt_sdf = sdf.to(device)
                         # avg_output_classes = (avg_output *2).round().long().squeeze(1)
 
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                        output_logits, sdf_pred = model(images, avg_output_one_hot, alpha)
+                        output_logits = model(images, avg_output_one_hot, alpha)
                         # output_softmax = torch.softmax(output_logits.detach(), dim=1)[:,2]
                         # output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,
@@ -314,16 +310,17 @@ def train_grayscale():
                         # print('One Hot Targets', targets_onehot.shape, 'Unique Values',
                         #      targets_onehot.unique(return_counts=True))
 
+                        print('Labelss type', labels.dtype)
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
-                        sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
+                        #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                         # dice_loss = cl_dice(targets_onehot,output_softmax)
                         # boundary_loss = sdf_loss(output_softmax, gt_sdf_white)
                         # loss = cross_entropy_loss + sdf_loss
-                        loss = cross_entropy_loss + sdf_loss
+                        loss = cross_entropy_loss
 
                         # val_cross_entropy_loss += cross_entropy_loss.item()
-                        val_sdf_loss = sdf_loss.item()
+                        #val_sdf_loss = sdf_loss.item()
                         # test_dice_loss +=  dice_loss
                         val_loss += loss.item()
 
@@ -352,14 +349,14 @@ def train_grayscale():
                                                                         save_path=f'{save_parent_dir}/val')
                             val_iou_dl += iou_dl
                             val_iou_img_prc += iou_img_prc
-                            sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                            # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                            fig, ax = plt.subplots(figsize=(6, 5))
-                            im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
-                            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                            plt.savefig(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'sdf_map',
-                                                     f'sdf_{val_batch}'))
-                            plt.close(fig)
+                            # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
+                            # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
+                            # fig, ax = plt.subplots(figsize=(6, 5))
+                            # im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
+                            # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                            # plt.savefig(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'sdf_map',
+                            #                          f'sdf_{val_batch}'))
+                            # plt.close(fig)
                             val_batch += 1
 
                     print(f'Val Loss for Epoch {epoch}', val_loss / len(val_dataloader))
@@ -381,18 +378,19 @@ def train_grayscale():
                         alpha = epoch / 250
                     else:
                         alpha = 1
-                    for images, labels, avg_output, sdf in test_dataloader:
+                    for images, labels, avg_output in test_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
                         avg_output = avg_output.to(device)
                         labels = labels.squeeze(1)
                         avg_output_classes = avg_output.squeeze(1)
-                        gt_sdf = sdf.to(device)
+                        #gt_sdf = sdf.to(device)
                         # avg_output_classes = (avg_output *2).round().long().squeeze(1)
 
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                        output_logits, sdf_pred = model(images, avg_output_one_hot, alpha)
+                        output_logits = model(images, avg_output_one_hot, alpha)
+                        #output_logits = output_logits.unsqueeze(0)
                         # output_softmax = torch.softmax(output_logits.detach(), dim=1)[:,2]
                         # output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,
@@ -403,16 +401,17 @@ def train_grayscale():
                         print('One Hot Targets', targets_onehot.shape, 'Unique Values',
                               targets_onehot.unique(return_counts=True))
 
+                        print('Labels dtype',labels.dtype)
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
-                        sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
+                        #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                         # dice_loss = cl_dice(targets_onehot,output_softmax)
                         # boundary_loss = sdf_loss(output_softmax, gt_sdf_white)
                         # loss = cross_entropy_loss + sdf_loss
-                        loss = cross_entropy_loss + sdf_loss
+                        loss = cross_entropy_loss
 
                         # test_cross_entropy_loss += cross_entropy_loss.item()
-                        test_sdf_loss += sdf_loss.item()
+                        #test_sdf_loss += sdf_loss.item()
                         # test_dice_loss +=  dice_loss
                         test_loss += loss.item()
 
@@ -440,14 +439,14 @@ def train_grayscale():
                                                                         save_path=f'{save_parent_dir}/test')
                             test_iou_dl += iou_dl
                             test_iou_img_prc += iou_img_prc
-                            sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                            # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                            fig, ax = plt.subplots(figsize=(6, 5))
-                            im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
-                            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                            plt.savefig(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch), 'sdf_map',
-                                                     f'sdf_{test_batch}'))
-                            plt.close(fig)
+                            # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
+                            # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
+                            # fig, ax = plt.subplots(figsize=(6, 5))
+                            # im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
+                            # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                            # plt.savefig(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch), 'sdf_map',
+                            #                          f'sdf_{test_batch}'))
+                            # plt.close(fig)
                             test_batch += 1
 
                     print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))

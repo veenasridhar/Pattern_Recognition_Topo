@@ -141,11 +141,11 @@ def iou_metrics(extracted_structures, gt,tolerance=3):
 
 def compute_betti_numbers(image):
 
-    print(image.shape)
     foreground_structures = extract_foreground_mask(image.unsqueeze(dim=-1).cpu().numpy())
-    cc = gudhi.CubicalComplex(dimensions= foreground_structures.shape, top_dimensional_cells = foreground_structures.astype(float).flatten())
+    filt = np.ascontiguousarray(1.0 - foreground_structures, dtype= np.float64)
+    cc = gudhi.CubicalComplex(dimensions= list(filt.shape), top_dimensional_cells = filt.ravel())
     cc.compute_persistence()
-    betti = cc.betti_numbers()
+    betti = cc.persistent_betti_numbers(0.5,0.5)
     print(betti)
 
     b0 = betti[0] if len(betti) > 0 else 0
