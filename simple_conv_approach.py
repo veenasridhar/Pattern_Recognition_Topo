@@ -46,8 +46,8 @@ class simple_Conv(nn.Module):
 
         self.relu_layer = nn.ReLU()
         self.sdf_head = nn.Sequential(
-                nn.Conv2d(16, 1, kernel_size=1),
-                nn.Tanh())
+                nn.Conv2d(16, 1, kernel_size=1))
+                #nn.Tanh())
 
     def forward(self,x,avg_output,alpha):
 
@@ -106,11 +106,10 @@ def topo_loss(pred_diagram, gt_diagram):
 def train_grayscale():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    k_fold = KFold(n_splits=5, shuffle=True)
     batch_size = 4
 
     subbatch_dirs, group_ids = [], []
-    for batch_id, batch_dir in enumerate(sorted(glob.glob('data/Final Data/Bigger Batches of Data SDF'))):  # 20 parent batches
+    for batch_id, batch_dir in enumerate(sorted(glob.glob('data/Final Data/Bigger Batches of Data SDF'))):  # 18 parent batches
         for sub in sorted(glob.glob(os.path.join(batch_dir, '*'))):  # its sub-batches
             subbatch_dirs.append(sub)
             group_ids.append(batch_id)
@@ -126,7 +125,7 @@ def train_grayscale():
     for fold in range (5):
 
 
-        train_idx, val_idx, test_idx = grouped_split(full_dataset.group_of_item, fold)
+        train_idx, val_idx, test_idx = grouped_split(full_dataset.group_of_item, fold, ratios=[0.8,0.2,0.1])
 
         print('Train Index',train_idx)
         print('Test Index',test_idx)

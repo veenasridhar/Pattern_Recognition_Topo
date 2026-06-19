@@ -4,7 +4,7 @@ import torchvision
 import torch
 import torch.nn as nn
 import wandb
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchinfo import summary
 import cv2
 from input_pipeline import *
@@ -16,6 +16,7 @@ from scipy.ndimage import distance_transform_edt
 import gudhi
 from cldice_loss import *
 from metrics import compute_betti_numbers
+import collections
 
 
 class simple_Conv(nn.Module):
@@ -44,7 +45,7 @@ class simple_Conv(nn.Module):
             nn.Tanh()
         )
 
-    def forward(self, x, avg_output, avg_sdf, alpha):
+    def forward(self, x, avg_output, alpha):
         x1 = self.relu_layer(self.conv_layer1(x))
         x2 = self.relu_layer(self.conv_layer2(x1))
         x3 = self.relu_layer(self.conv_layer3(x2))
@@ -56,8 +57,8 @@ class simple_Conv(nn.Module):
         #output = conv_output
 
         sdf_output = self.sdf_head(x6)
-        sdf_final_output = (alpha * sdf_output + avg_sdf)/2
-        return output, sdf_final_output
+        #sdf_final_output = (alpha * sdf_output + avg_sdf)/2
+        return output, sdf_output
 
 def get_persistance_diagram(prob_map):
 
@@ -89,25 +90,33 @@ def train_grayscale():
     k_fold = KFold(n_splits=5, shuffle=True)
     batch_size=4
 
-    train_dataset, test_dataset = input_pipeline_residual_grayscale(single_image_reconstruction=False)
-    train_indices = np.arange(len(train_dataset))
+    subbatch_dirs, group_ids = [], []
+    for batch_id, batch_dir in enumerate(
+            sorted(glob.glob('data/Final Data/Bigger Batches of Data'))):  # 18 parent batches
+        for sub in sorted(glob.glob(os.path.join(batch_dir, '*'))):  # its sub-batches
+            subbatch_dirs.append(sub)
+            group_ids.append(batch_id)
 
-    for fold, (train_index, val_index) in enumerate(k_fold.split(train_indices)):
+    full_dataset = TopoDatasetImg(subbatch_dirs, group_ids)
+    print('Total Sub Batches ', len(full_dataset.items))
+    print("number of views:", len(set(full_dataset.group_of_item)))
+    print("sub-batches per view:", collections.Counter(full_dataset.group_of_item.tolist()))
+
+    for fold in range(5):
+
+        train_idx, val_idx, test_idx = grouped_split(full_dataset.group_of_item, fold, ratios=[0.8, 0.2, 0.1])
+
+        print('Train Index', train_idx)
+        print('Test Index', test_idx)
+        print('Val Index', val_idx)
 
         model = simple_Conv(5, 3, kernel_size=3, stride=1, padding=1)
         model = model.to(device)
         # print(summary(model))
 
-        train_subset = torch.utils.data.Subset(train_dataset, train_index)
-        val_subset = torch.utils.data.Subset(train_dataset, val_index)
-
-        # Transform the Dataset into DataLoader
-        train_dataloader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=False, num_workers=2,
-                                      pin_memory=True)
-        val_dataloader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=False, num_workers=2,
-                                    pin_memory=True)
-        test_dataloader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False, num_workers=2,
-                                     pin_memory=True)
+        train_dataloader = DataLoader(Subset(full_dataset, train_idx), batch_size=batch_size, shuffle=False)
+        val_dataloader = DataLoader(Subset(full_dataset, val_idx), batch_size=batch_size, shuffle=False)
+        test_dataloader = DataLoader(Subset(full_dataset, test_idx), batch_size=batch_size, shuffle=False)
 
         lr = 0.0003
         epochs = 1000
@@ -154,19 +163,20 @@ def train_grayscale():
                 alpha =  1
             accum_steps = 4
 
-            for i,(images, labels,avg_output,sdf, avg_output_sdf) in enumerate(train_dataloader):
+            for i,(images, labels,avg_output) in enumerate(train_dataloader):
 
                 images = images.to(device)
                 labels = labels.to(device)
                 avg_output = avg_output.to(device)
 
                 avg_output_classes = avg_output.squeeze(1)                              # [B, H, W] - Labels - 0,1,2
-                gt_sdf = sdf.to(device)
-                avg_output_sdf = avg_output_sdf.to(device)
+                #gt_sdf = sdf.to(device)
+                #avg_output_sdf = avg_output_sdf.to(device)
                 labels = labels.squeeze(1)                                              # [B, H,W] - Labels - 0,1,2
                 avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                output_logits, sdf_pred  = model(images,avg_output_one_hot,avg_output_sdf, alpha)
+                #output_logits, sdf_pred  = model(images,avg_output_one_hot,avg_output_sdf, alpha)
+                output_logits, sdf_pred = model(images, avg_output_one_hot, alpha)
                 output_softmax = torch.softmax(output_logits, dim=1)
                 output = torch.argmax(output_logits,dim=1)                              # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
 
@@ -175,18 +185,19 @@ def train_grayscale():
                 targets_onehot = targets_onehot.float()  # scatter_ gives long by default
 
                 cross_entropy_loss = crossentropy_loss(output_logits, labels)
-                sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
+                #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                 dice_loss = cl_dice(targets_onehot,output_softmax,train_batch)
 
                 #loss = (1-alpha) * cross_entropy_loss + alpha * sdf_loss
-                loss = cross_entropy_loss + sdf_loss +dice_loss
+                #loss = cross_entropy_loss + sdf_loss +dice_loss
+                loss = cross_entropy_loss + dice_loss
 
                 optimizer1.zero_grad()
                 loss.backward()
                 optimizer1.step()
 
                 train_cross_entropy_loss += cross_entropy_loss.item()
-                train_sdf_loss += sdf_loss.item()
+                #train_sdf_loss += sdf_loss.item()
                 train_dice_loss += dice_loss.item()
                 train_loss += loss.item()
 
@@ -223,8 +234,8 @@ def train_grayscale():
 
 
             print(f'Train Loss for Epoch {epoch}', train_loss / len(train_dataloader))
-            print('Train IoU for deep learning', train_iou_dl / len(train_subset))
-            print('Train IoU for image processing ', train_iou_img_prc / len(train_subset))
+            print('Train IoU for deep learning', train_iou_dl / len(train_idx))
+            print('Train IoU for image processing ', train_iou_img_prc / len(train_idx))
 
             scheduler.step()
 
@@ -240,20 +251,20 @@ def train_grayscale():
                     val_iou_dl = 0.0
                     val_iou_img_prc = 0.0
 
-                    for images, labels, avg_output, sdf,avg_output_sdf in val_dataloader:
+                    for images, labels, avg_output in val_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
                         avg_output = avg_output.to(device)
-                        avg_output_sdf = avg_output_sdf.to(device)
+                        #avg_output_sdf = avg_output_sdf.to(device)
 
                         labels = labels.squeeze(1)
                         print('Labels Shape', labels.shape)
                         avg_output_classes = avg_output.squeeze(1)
                         print('Avg Output Shape', avg_output_classes.shape)
-                        gt_sdf = sdf.to(device)
+                        #gt_sdf = sdf.to(device)
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                        output_logits, sdf_pred = model(images, avg_output_one_hot, avg_output_sdf, alpha)
+                        output_logits, sdf_pred = model(images, avg_output_one_hot, alpha)
                         output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,dim=1)  # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
@@ -264,13 +275,14 @@ def train_grayscale():
 
 
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
-                        sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
+                        #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                         dice_loss = cl_dice(targets_onehot,output_softmax,val_batch)
 
-                        loss = cross_entropy_loss + sdf_loss + dice_loss
+                        #loss = cross_entropy_loss + sdf_loss + dice_loss
+                        loss = cross_entropy_loss + dice_loss
 
                         val_cross_entropy_loss += cross_entropy_loss.item()
-                        val_sdf_loss += sdf_loss.item()
+                        #val_sdf_loss += sdf_loss.item()
                         val_dice_loss +=  dice_loss.item()
                         val_loss += loss.item()
 
@@ -311,8 +323,8 @@ def train_grayscale():
                             val_batch += 1
 
                     print(f'Val Loss for Epoch {epoch}', val_loss / len(val_dataloader))
-                    print('Val IoU for deep learning', val_iou_dl / len(val_subset))
-                    print('Val IoU for image processing ', val_iou_img_prc / len(val_subset))
+                    print('Val IoU for deep learning', val_iou_dl / len(val_idx))
+                    print('Val IoU for image processing ', val_iou_img_prc / len(val_idx))
 
             # Starting a test loop
             if epoch % 10 == 0:
@@ -326,19 +338,19 @@ def train_grayscale():
                     test_iou_dl = 0.0
                     test_iou_img_prc = 0.0
 
-                    for images, labels, avg_output, sdf,avg_output_sdf in test_dataloader:
+                    for images, labels, avg_output in test_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
                         avg_output = avg_output.to(device)
                         labels = labels.squeeze(1)
                         avg_output_classes = avg_output.squeeze(1)
-                        gt_sdf = sdf.to(device)
-                        avg_output_sdf = avg_output_sdf.to(device)
+                        #gt_sdf = sdf.to(device)
+                        #avg_output_sdf = avg_output_sdf.to(device)
                         # avg_output_classes = (avg_output *2).round().long().squeeze(1)
 
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                        output_logits, sdf_pred = model(images, avg_output_one_hot, avg_output_sdf, alpha)
+                        output_logits, sdf_pred = model(images, avg_output_one_hot, alpha)
                         output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,
                                               dim=1)  # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
@@ -349,13 +361,14 @@ def train_grayscale():
                               targets_onehot.unique(return_counts=True))
 
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
-                        sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
+                        #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                         dice_loss = cl_dice(targets_onehot,output_softmax,test_batch)
 
-                        loss = cross_entropy_loss + sdf_loss + dice_loss
+                        #loss = cross_entropy_loss + sdf_loss + dice_loss
+                        loss = cross_entropy_loss  + dice_loss
 
                         test_cross_entropy_loss += cross_entropy_loss.item()
-                        test_sdf_loss += sdf_loss.item()
+                        #test_sdf_loss += sdf_loss.item()
                         test_dice_loss +=  dice_loss
                         test_loss += loss.item()
 
@@ -395,8 +408,8 @@ def train_grayscale():
                             test_batch += 1
 
                     print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))
-                    print('Test IoU for deep learning', test_iou_dl / len(test_dataset))
-                    print('Test IoU for image processing ', test_iou_img_prc / len(test_dataset))
+                    print('Test IoU for deep learning', test_iou_dl / len(test_idx))
+                    print('Test IoU for image processing ', test_iou_img_prc / len(test_idx))
 
                 run.log({'epoch': epoch,
                          'alpha': alpha,
@@ -405,11 +418,11 @@ def train_grayscale():
                          'Test_Total_Loss': test_loss / len(test_dataloader),
                          'Val_Total_Loss': val_loss / len(val_dataloader),
                          'Train_CE_Loss': train_cross_entropy_loss / len(train_dataloader),'Val_CE_Loss': val_cross_entropy_loss / len(val_dataloader),'Test_CE_Loss': test_cross_entropy_loss / len(test_dataloader),
-                         'Train IoU DL': train_iou_dl / len(train_subset),
-                         'Train IoU_img': train_iou_img_prc / len(train_subset),
-                         'Test IoU DL': test_iou_dl / len(test_dataset),
-                         'Test IoU_img': test_iou_img_prc / len(test_dataset),
-                         'Val IoU DL': val_iou_dl / len(val_subset), 'Val IoU_img': val_iou_img_prc / len(val_subset),
+                         'Train IoU DL': train_iou_dl / len(train_idx),
+                         'Train IoU_img': train_iou_img_prc / len(train_idx),
+                         'Test IoU DL': test_iou_dl / len(test_idx),
+                         'Test IoU_img': test_iou_img_prc / len(test_idx),
+                         'Val IoU DL': val_iou_dl / len(val_idx), 'Val IoU_img': val_iou_img_prc / len(val_idx),
                          'Train Dice Loss': train_dice_loss / len(train_dataloader),
                          'Val Dice Loss': val_dice_loss / len(val_dataloader),
                          'Test_Dice_Loss': test_dice_loss / len(test_dataloader),

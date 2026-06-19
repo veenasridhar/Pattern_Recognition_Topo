@@ -13,6 +13,8 @@ from sklearn.model_selection import KFold,train_test_split
 import numpy as np
 import glob
 
+from baseline_conv_approach import convert_labels
+
 
 class SimpleCustomBatch(Dataset):
 
@@ -630,6 +632,29 @@ class TopoDataset(Dataset):
 class TopoDatasetImg(Dataset):
     def __init__(self, subbatch_dirs, group_ids):
         self.items, self.group_of_item = [], []
+        # Image Transformations
+        self.train_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
+            v2.Resize((256, 256)),
+            # v2.Grayscale(num_output_channels=3),                    # Only for VAE approach
+            v2.ToTensor(),
+            # v2.Normalize(mean=(0.5,), std= (1.0,)),
+        ])
+
+        self.target_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
+            # v2.Resize((256, 256)),
+            v2.ToTensor(),
+            # v2.Normalize(mean=(0.5,), std= (1.0,)),
+        ])
+
+        self.test_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Resize((256, 256)),
+            # v2.Grayscale(num_output_channels=3),                # Only for VAE approach
+            v2.ToTensor(),
+            # v2.Normalize(mean=(0.5,), std= (1.0,)),
+        ])
         for dirpath, dirnames, filenames in os.walk('data/Final Data/Bigger Batches of Data'):
             if any(f.endswith(".png") for f in filenames):  # a leaf that holds data = a sub-batch
                 rel = os.path.relpath(dirpath, 'data/Final Data/Bigger Batches of Data').split(os.sep)
@@ -640,8 +665,17 @@ class TopoDatasetImg(Dataset):
         print('Unique',uniq)
         self.group_of_item = np.array([uniq[v] for v in self.group_of_item])
         assert len(self.items) > 0, f"no .png-containing folders under {'data/Final Data/Bigger Batches of Data'}"
+
     def __len__(self):
         return len(self.items)
+
+    def convert_labels(self,input):
+
+        input = input.clone()
+        input[input < 0.25] = 0
+        input[input > 0.75] = 2
+        input[(input >= 0.25) & (input < 0.75)] =1  #since floating point precision might vary
+        return input.long()
 
     def __getitem__(self, i):
         sub_dir = self.items[i]
@@ -649,10 +683,22 @@ class TopoDatasetImg(Dataset):
         sub = (sub_dir.split('/')[-1]).split(' ')[-1]
         image_files = sorted(glob.glob(os.path.join(sub_dir, f'*.png')))  # the 5 images
         print('Image Files',image_files)
-        images = torch.stack([torchvision.io.decode_image(f,torchvision.io.ImageReadMode.GRAY) for f in image_files], dim=0)  # [5,H,W]
+        images = torch.cat([self.train_transformations(torchvision.io.decode_image(f,torchvision.io.ImageReadMode.GRAY)) for f in image_files], dim=0)  # [5,H,W]
+        print(images.shape)
+        print(images[0].unique())
 
-        labels = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches GT SDF', f'gt_{sub}.npy')))
-        avg_output = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing SDF', f'image_{sub}.npy')))
+
+        labels = torchvision.io.decode_image(os.path.join('data/Final Data/gt_grayscale_resized', f'gt {sub}.png'),torchvision.io.ImageReadMode.GRAY)
+        print(labels.shape)
+        labels = self.target_transformations(labels)
+        print(labels.unique())
+        labels = self.convert_labels(labels)
+        print('Labels UNique',labels.unique())
+        avg_output = torchvision.io.decode_image(os.path.join('data/Final Data/image processing resized', f'result_{sub}.png'),torchvision.io.ImageReadMode.GRAY)
+        print(avg_output.shape)
+        avg_output = self.target_transformations(avg_output)
+        avg_output = self.convert_labels(avg_output)
+        print(avg_output.unique())
         #sdf = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing', f'sdf_{sub}.npy'))).float()
         return images, labels, avg_output
 
