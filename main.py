@@ -39,21 +39,21 @@ def main():
         classical_approach('data/batched_data_resized_red/test/',None,None,True)
 
     elif baseline == 'Train':
-        train_dataset, test_dataset= input_pipeline_grayscale(single_image_reconstruction=False)
+
         batch_size =4
-        train_indices = np.arange(len(train_dataset))
-        k_fold = KFold(n_splits=5, shuffle=True)
+        data_dir = 'data/Final Data/Bigger Batches of Data'
+        ground_truth_dir = 'data/Final Data/gt_grayscale_resized'
+        image_processing_dir = 'data/Final Data/image processing resized'
 
         wandb.login()
 
-        for fold, (train_index, val_index) in enumerate(k_fold.split(train_indices)):
-            train_subset = torch.utils.data.Subset(train_dataset, train_index)
-            val_subset = torch.utils.data.Subset(train_dataset, val_index)
+        for fold in range(5):
 
+            train_dataset, val_dataset, test_dataset = input_pipeline(data_dir, ground_truth_dir, image_processing_dir, fold)
 
             # Transform the Dataset into DataLoader
-            train_dataloader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
-            val_dataloader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+            train_dataloader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+            val_dataloader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
             test_dataloader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
 

@@ -9,7 +9,7 @@ from diffusers import AutoencoderKL
 import torch.nn as nn
 from torchvision.transforms import v2
 from torchinfo import summary
-from attSets import AttSets
+#from attSets import AttSets
 from input_pipeline import *
 from tqdm import tqdm
 from torchmetrics import StructuralSimilarityIndexMeasure
@@ -61,7 +61,7 @@ class VAEGANFineTuner:
         self.multi_image_mode = multi_image_mode
         self.vae = AutoencoderKL.from_pretrained(model_name)
         #self.vae = AutoencoderKL.from_pretrained('./finetuned_vae/individually_trained_models',use_safetensors=True) # Forces the model to use pretrained weights
-        self.aggregation_module = AttSets(latent_channels=4)
+        #self.aggregation_module = AttSets(latent_channels=4)
         self.vae.to(self.device)
         #self.PROJECT_NAME = 'Individual Reconstruction Cross Validation'
         self.PROJECT_NAME = 'Topology Optimization'
@@ -73,33 +73,7 @@ class VAEGANFineTuner:
         #print('Running on ', self.device)
         #self.disc_warmup = 5
 
-    def sharpness_loss(self,reconstructed):
-
-        t = [(1.0, 0.0, 0.0),  # full red
-             (0.5, 0.5, 0.5),  # full grey
-             (1.0, 1.0, 1.0), ]  # full white
-        t = torch.tensor(t,dtype= torch.float,device=self.device)  # The shape of the tensor is (T,C)
-        #print(t.shape)
-        reconstructed = reconstructed.permute(0,2,3,1).unsqueeze(-2)            # This reshapes the tensor to be (B,H,W,1,C)
-        print(reconstructed.shape)
-
-        dist = ((reconstructed - t) ** 2).sum(dim=-1)  # This first subtracts (H,W,1,C) - (T,C) and the result is summed along dim(-1) thus resulting in (H,W,T)
-        '''
-        [[[0.9,0,0],[0,0,0],[0,0,0],[0,0,0]],
-        [[[0.9,0,0],[0,0,0],[0,0,0],[0,0,0]],
-        [[0.5,0,0],[0.5,0,0],[0,0,0],[0,0,0]],
-        [[0,0,0],[0,0,0],[0.9,0.9,0.9],[0,0,0]],
-        [[0,0,0],[0,0,0],[0.9,0.9,0.9],[0,0,0]]]
-
-        This is a 4x4 image with 3 channels. Calculating distance would mean subtracting each pixel [0.9,0,0] with the target values (red,grey and white). This why unsqueeze(-2) is important to match dimensions for subtraction.
-        Sum along dimension -1  will ensure that the red, grey and white each have 1 value instream of 3 channels. The shape of dist is [B,H,W,T] - T is the distance to the each of the target color '''
-        minimum_dist = dist.min(-1).values.mean()
-        ''' min(-1) selects the  minimum distance to the target value and is averaged across all pixels of all images. This is equal to calculating for each images individually and then averaging.
-        '''
-        return minimum_dist
-
-
-    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=51, lr=0.0001, kl_weight=1e-6, latent_technique = 'attention_based', save_path="./finetuned_vae"):
+    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=51, lr=0.0001, kl_weight=1e-6, latent_technique = 'averaging', save_path="./finetuned_vae"):
 
         # Start a new wandb run to track this script.
         run = wandb.init(

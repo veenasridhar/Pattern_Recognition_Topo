@@ -7,55 +7,57 @@ from scipy.ndimage import distance_transform_edt
 import matplotlib.pyplot as plt
 
 
-def convert_to_sdf(batch_dir,batch):
+def convert_to_sdf(batch_dir):
     # index = 0
     # global_pos_max = 0
     # global_neg_min = float ('inf')
-    # for batch in os.listdir('data/Final Data/batched_data_grayscale_resized/train'):
-    #     for image_path in os.listdir(os.path.join(batch_dir, batch)):
-    #         image = cv2.imread(os.path.join(batch_dir, batch, image_path),cv2.IMREAD_GRAYSCALE)
-    #         image = image/255.0
-    #         image_labels = convert_labels(image)
-    #         un_normalised_sdf = sdf_distance_function(image_labels)
-    #         global_pos_max = max(global_pos_max,un_normalised_sdf.max())
-    #         global_neg_min = min(global_neg_min,un_normalised_sdf.min())
+    # for main_batch in os.listdir('data/Final Data/Bigger Batches of Data'):
+    #     for sub_batch in os.listdir(os.path.join('data/Final Data/Bigger Batches of Data',main_batch)):
+    #         for image_path in os.listdir(os.path.join('data/Final Data/Bigger Batches of Data', main_batch, sub_batch)):
+    #             image = cv2.imread(os.path.join('data/Final Data/Bigger Batches of Data', main_batch, sub_batch, image_path),cv2.IMREAD_GRAYSCALE)
+    #             image = image/255.0
+    #             print(np.unique(image))
+    #             image_labels = convert_labels(image)
+    #             print(np.unique(image_labels))
+    #             un_normalised_sdf,distance_inside, distance_outside  = sdf_distance_function(image_labels)
+    #             global_pos_max = max(global_pos_max,un_normalised_sdf.max())
+    #             global_neg_min = min(global_neg_min,un_normalised_sdf.min())
     #
     # print(f'Dataset Stats: Max: {global_pos_max} Min: {global_neg_min}')
 
-    global_pos_max = 194.6535
+    global_pos_max = 194.653
     global_neg_min = -21.0
 
-    for set in ['test']:
-        #for batch in os.listdir(f'data/Final Data/batched_data_grayscale_resized/{set}'):
+    #for main_batch in os.listdir('data/Final Data/Bigger Batches of Data'):
+    #for sub_batch in os.listdir(os.path.join('data/Final Data/gt_grayscale_resized')):
+    #index =0
+    for image_path in os.listdir(os.path.join(f'data/Final Data/gt_grayscale_resized')):
+        index = (image_path.split('.')[0]).split(' ')[-1]
+        image = cv2.imread(os.path.join('data/Final Data/gt_grayscale_resized', image_path),cv2.IMREAD_GRAYSCALE)
+        image = image/255.0
+        image_labels = convert_labels(image)
+        un_normalised_sdf, distance_inside, distance_outside = sdf_distance_function(image_labels)
+        normalised_sdf = np.zeros_like(un_normalised_sdf, dtype=np.float32)
+        pos_mask = un_normalised_sdf > 0
+        neg_mask = un_normalised_sdf < 0
+        normalised_sdf[pos_mask] = un_normalised_sdf[pos_mask] / global_pos_max
+        normalised_sdf[neg_mask] = un_normalised_sdf[neg_mask] / abs(global_neg_min)   # Important as negative and negative cancels out
+        #visualise_sdf(image_labels, image_labels, distance_inside, distance_outside, un_normalised_sdf, normalised_sdf)
 
-            batch = ''
-            for image_path in os.listdir(os.path.join(f'data/Final Data/gt_grayscale_resized/{set}', batch)):
-                index = (image_path.split('.')[0]).split(' ')[-1]
-                print(index)
-                if int(index) == 9:
-                    print('Processing ',image_path)
-                    image = cv2.imread(os.path.join(f'data/Final Data/gt_grayscale_resized/{set}', batch, image_path),cv2.IMREAD_GRAYSCALE)
-                    image = image/255.0
-                    image_labels = convert_labels(image)
-                    un_normalised_sdf = sdf_distance_function(image_labels)
-                    normalised_sdf = np.zeros_like(un_normalised_sdf, dtype=np.float32)
-                    pos_mask = un_normalised_sdf > 0
-                    neg_mask = un_normalised_sdf < 0
-                    normalised_sdf[pos_mask] = un_normalised_sdf[pos_mask] / global_pos_max
-                    normalised_sdf[neg_mask] = un_normalised_sdf[neg_mask] / abs(global_neg_min)   # Important as negative and negative cancels out
-                    visualise_sdf(image_labels, image_labels, neg_mask, pos_mask, un_normalised_sdf, normalised_sdf)
-
-                    if not os.path.exists(os.path.join(f'data/Final Data/gt_data_sdf/{set}',batch)):
-                        os.mkdir(os.path.join(f'data/Final Data/gt_data_sdf/{set}',batch))
-                    if not os.path.exists(os.path.join(f'data/Final Data/gt_data_sdf/vis/{set}', batch)):
-                        os.mkdir(os.path.join(f'data/Final Data/gt_data_sdf/vis/{set}', batch))
-                    np.save(os.path.join(f'data/Final Data/gt_data_sdf/{set}',batch,f'image_{index}.npy' ), normalised_sdf)
-                    fig, ax = plt.subplots(figsize=(6, 6))
-                    im = ax.imshow(normalised_sdf, cmap='RdBu', vmin=-1, vmax=1)
-                    fig.colorbar(im, ax=ax, label='normalized signed distance')
-                    ax.axis('off')
-                    fig.savefig(os.path.join(f'data/Final Data/gt_data_sdf/vis/{set}', batch,f'image_{index}.png'), dpi=150, bbox_inches='tight')
-                    plt.close(fig)
+        # if not os.path.exists(os.path.join('data/Final Data/Bigger Batches of Data SDF', main_batch)):
+        #     os.mkdir(os.path.join('data/Final Data/Bigger Batches of Data SDF', main_batch))
+        # if not os.path.exists(os.path.join('data/Final Data/Bigger Batches of Data SDF', main_batch, sub_batch)):
+        #     os.mkdir(os.path.join('data/Final Data/Bigger Batches of Data SDF', main_batch, sub_batch))
+        if not os.path.exists(os.path.join('data/Final Data/Batches GT SDF/vis')):
+            os.mkdir('data/Final Data/Batches GT SDF/vis')
+        np.save(os.path.join('data/Final Data/Batches GT SDF', f'gt {index}.npy'), normalised_sdf)
+        fig, ax = plt.subplots(figsize=(6, 6))
+        im = ax.imshow(normalised_sdf, cmap='seismic', vmin=-1, vmax=1)
+        fig.colorbar(im, ax=ax, label='normalized signed distance')
+        ax.axis('off')
+        fig.savefig(os.path.join('data/Final Data/Batches GT SDF/vis', f'image_{index}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        #index += 1
 
 
 
@@ -120,7 +122,7 @@ def sdf_distance_function(label_map,num_classes=1):
     #visualise_sdf(label_map, mask, distance_inside, distance_outside, sdf, normalized=None)
 
     # boundary stays 0
-    return sdf
+    return sdf, distance_inside,distance_outside
 
 
 def visualise_sdf(label_map,mask,dist_in,dist_out,raw_sdf,normalized):
@@ -177,7 +179,7 @@ def visualise_sdf(label_map,mask,dist_in,dist_out,raw_sdf,normalized):
     print(f"  Outside pixels: {(~mask).sum()}")
     print(f"  Boundary pixels (SDF=0): {(raw_sdf == 0).sum()}")
 
-#convert_to_sdf('data/Final Data/batched_data_grayscale_original size/test',batch=0)
+#convert_to_sdf('data/Final Data/Bigger Batches of Data')
 #
 # for gt in os.listdir('data/Final Data/gt_grayscale_resized/test'):
 #     index = (gt.split('.')[0]).split(' ')[-1]

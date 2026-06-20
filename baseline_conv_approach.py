@@ -84,27 +84,38 @@ def topo_loss(pred_diagram, gt_diagram):
         pred_diagram, gt_diagram, order=2
     )
 
+def build_dataset_items(data_directory):
+    batches_list , items = [], []
+    for dirpath, dirnames, filenames in os.walk(data_directory):
+        if any(f.endswith(".png") for f in filenames):                              # a leaf that holds data = a sub-batch
+            rel = os.path.relpath(dirpath, data_directory).split(os.sep)
+            view = os.path.join(*rel[:1])                                           # the main-batch
+            items.append(dirpath)                                                   # Items have the full address of all batches from data directory to final leaf batch
+            batches_list.append(view)
+    uniq = {v: k for k, v in enumerate(sorted(set(batches_list)))}                  #Dictionary of Main batches as keys and a number as the value
+
+    batches_list = np.array([uniq[v] for v in batches_list])                        # Convert the list of batch names (string) into number.
+    assert len(items) > 0, f"no .png-containing folders under {data_directory}"
+    return batches_list, items
 
 def train_grayscale():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    k_fold = KFold(n_splits=5, shuffle=True)
+
     batch_size=4
 
-    subbatch_dirs, group_ids = [], []
-    for batch_id, batch_dir in enumerate(
-            sorted(glob.glob('data/Final Data/Bigger Batches of Data'))):  # 18 parent batches
-        for sub in sorted(glob.glob(os.path.join(batch_dir, '*'))):  # its sub-batches
-            subbatch_dirs.append(sub)
-            group_ids.append(batch_id)
+    data_dir = 'data/Final Data/Bigger Batches of Data'
+    ground_truth_dir = 'data/Final Data/gt_grayscale_resized'
+    image_processing_dir = 'data/Final Data/image processing resized'
+    batches_list, items = build_dataset_items(data_dir)  # batches_list is the list of batches as main batch indices [7,7,11,11,11,11,....]
+    # items is the list of  full address of each batch
+    print('Total Sub Batches ', len(items))
+    print("number of views:", len(set(batches_list)))
+    print("sub-batches per view:", collections.Counter(batches_list.tolist()))
 
-    full_dataset = TopoDatasetImg(subbatch_dirs, group_ids)
-    print('Total Sub Batches ', len(full_dataset.items))
-    print("number of views:", len(set(full_dataset.group_of_item)))
-    print("sub-batches per view:", collections.Counter(full_dataset.group_of_item.tolist()))
 
     for fold in range(5):
 
-        train_idx, val_idx, test_idx = grouped_split(full_dataset.group_of_item, fold, ratios=[0.8, 0.2, 0.1])
+        train_idx, val_idx, test_idx = grouped_split(batches_list, fold, ratios=[0.7, 0.2, 0.1])
 
         print('Train Index', train_idx)
         print('Test Index', test_idx)
@@ -114,9 +125,13 @@ def train_grayscale():
         model = model.to(device)
         # print(summary(model))
 
-        train_dataloader = DataLoader(Subset(full_dataset, train_idx), batch_size=batch_size, shuffle=False)
-        val_dataloader = DataLoader(Subset(full_dataset, val_idx), batch_size=batch_size, shuffle=False)
-        test_dataloader = DataLoader(Subset(full_dataset, test_idx), batch_size=batch_size, shuffle=False)
+        train_dataset = TopoDatasetImg(items, train_idx, ground_truth_dir,image_processing_dir, augment=True)
+        val_dataset = TopoDatasetImg(items, val_idx, ground_truth_dir,image_processing_dir, augment=False)
+        test_dataset = TopoDatasetImg(items, test_idx, ground_truth_dir,image_processing_dir, augment=False)
+
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2,pin_memory=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         lr = 0.0003
         epochs = 1000
@@ -125,7 +140,7 @@ def train_grayscale():
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1,T_max=1000, eta_min=1e-5)
 
         weights = torch.tensor([0.25, 0.35, 0.5])
-        crossentropy_loss = torch.nn.CrossEntropyLoss(weight=weights).to(device)
+        crossentropy_loss = torch.nn.CrossEntropyLoss().to(device)
         cl_dice = soft_dice_cldice()
         save_parent_dir = 'Residual Convolutional Network Results'
 
@@ -156,7 +171,7 @@ def train_grayscale():
             train_batch = 0
             train_iou_dl = 0.0
             train_iou_img_prc = 0.0
-
+            train_img_proc_dice_loss = 0.0
             if epoch < 200:
                 alpha = epoch / 200
             else:
@@ -187,7 +202,7 @@ def train_grayscale():
                 cross_entropy_loss = crossentropy_loss(output_logits, labels)
                 #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                 dice_loss = cl_dice(targets_onehot,output_softmax,train_batch)
-
+                image_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),train_batch)
                 #loss = (1-alpha) * cross_entropy_loss + alpha * sdf_loss
                 #loss = cross_entropy_loss + sdf_loss +dice_loss
                 loss = cross_entropy_loss + dice_loss
@@ -200,6 +215,7 @@ def train_grayscale():
                 #train_sdf_loss += sdf_loss.item()
                 train_dice_loss += dice_loss.item()
                 train_loss += loss.item()
+                train_img_proc_dice_loss += image_processing_dice_loss.item()
 
 
                 if epoch % 10 ==0:
@@ -222,14 +238,14 @@ def train_grayscale():
                         train_iou_dl += iou
                         train_iou_img_prc += img_prc_iou
 
-                        sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                        # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                        fig, ax = plt.subplots(figsize=(6, 5))
-                        im = ax.imshow(sdf_vis, cmap='seismic', vmin=-1, vmax=1)
-                        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                        plt.savefig(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map',
-                                                 f'sdf_{train_batch}'))
-                        plt.close(fig)
+                        # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
+                        # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
+                        # fig, ax = plt.subplots(figsize=(6, 5))
+                        # im = ax.imshow(sdf_vis, cmap='seismic', vmin=-1, vmax=1)
+                        # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                        # plt.savefig(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map',
+                        #                          f'sdf_{train_batch}'))
+                        # plt.close(fig)
                         train_batch += 1
 
 
@@ -250,6 +266,7 @@ def train_grayscale():
                     val_batch = 0
                     val_iou_dl = 0.0
                     val_iou_img_prc = 0.0
+                    val_image_processing_dice_loss = 0.0
 
                     for images, labels, avg_output in val_dataloader:
                         images = images.to(device)
@@ -258,9 +275,7 @@ def train_grayscale():
                         #avg_output_sdf = avg_output_sdf.to(device)
 
                         labels = labels.squeeze(1)
-                        print('Labels Shape', labels.shape)
                         avg_output_classes = avg_output.squeeze(1)
-                        print('Avg Output Shape', avg_output_classes.shape)
                         #gt_sdf = sdf.to(device)
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
@@ -270,14 +285,13 @@ def train_grayscale():
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
                         targets_onehot = targets_onehot.permute(0, 3, 1, 2)  # (B, C, H, W)
                         targets_onehot = targets_onehot.float()
-                        print('One Hot Targets', targets_onehot.shape, 'Unique Values',
-                              targets_onehot.unique(return_counts=True))
+
 
 
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                         dice_loss = cl_dice(targets_onehot,output_softmax,val_batch)
-
+                        image_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),val_batch)
                         #loss = cross_entropy_loss + sdf_loss + dice_loss
                         loss = cross_entropy_loss + dice_loss
 
@@ -285,6 +299,7 @@ def train_grayscale():
                         #val_sdf_loss += sdf_loss.item()
                         val_dice_loss +=  dice_loss.item()
                         val_loss += loss.item()
+                        val_image_processing_dice_loss += image_processing_dice_loss.item()
 
                         # if epoch % 10 == 0:
                         if not os.path.exists(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch))):
@@ -312,14 +327,14 @@ def train_grayscale():
                             val_iou_dl += iou_dl
                             val_iou_img_prc += iou_img_prc
 
-                            sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                            # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                            fig, ax = plt.subplots(figsize=(6, 5))
-                            im = ax.imshow(sdf_vis, cmap='seismic', vmin=-1, vmax=1)
-                            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                            plt.savefig(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'sdf_map',
-                                                     f'sdf_{val_batch}'))
-                            plt.close(fig)
+                            # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
+                            # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
+                            # fig, ax = plt.subplots(figsize=(6, 5))
+                            # im = ax.imshow(sdf_vis, cmap='seismic', vmin=-1, vmax=1)
+                            # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                            # plt.savefig(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'sdf_map',
+                            #                          f'sdf_{val_batch}'))
+                            # plt.close(fig)
                             val_batch += 1
 
                     print(f'Val Loss for Epoch {epoch}', val_loss / len(val_dataloader))
@@ -337,7 +352,7 @@ def train_grayscale():
                     test_batch = 0
                     test_iou_dl = 0.0
                     test_iou_img_prc = 0.0
-
+                    test_image_processing_dice_loss = 0.0
                     for images, labels, avg_output in test_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
@@ -363,13 +378,15 @@ def train_grayscale():
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                         dice_loss = cl_dice(targets_onehot,output_softmax,test_batch)
+                        image_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),test_batch)
 
                         #loss = cross_entropy_loss + sdf_loss + dice_loss
                         loss = cross_entropy_loss  + dice_loss
 
                         test_cross_entropy_loss += cross_entropy_loss.item()
                         #test_sdf_loss += sdf_loss.item()
-                        test_dice_loss +=  dice_loss
+                        test_dice_loss +=  dice_loss.item()
+                        test_image_processing_dice_loss += image_processing_dice_loss.item()
                         test_loss += loss.item()
 
                         # if epoch %10 == 0:
@@ -397,14 +414,14 @@ def train_grayscale():
                             test_iou_dl += iou_dl
                             test_iou_img_prc += iou_img_prc
 
-                            sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                            # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                            fig, ax = plt.subplots(figsize=(6, 5))
-                            im = ax.imshow(sdf_vis, cmap='seismic', vmin=-1, vmax=1)
-                            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                            plt.savefig(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch), 'sdf_map',
-                                                     f'sdf_{test_batch}'))
-                            plt.close(fig)
+                            # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
+                            # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
+                            # fig, ax = plt.subplots(figsize=(6, 5))
+                            # im = ax.imshow(sdf_vis, cmap='seismic', vmin=-1, vmax=1)
+                            # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                            # plt.savefig(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch), 'sdf_map',
+                            #                          f'sdf_{test_batch}'))
+                            # plt.close(fig)
                             test_batch += 1
 
                     print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))
@@ -423,12 +440,15 @@ def train_grayscale():
                          'Test IoU DL': test_iou_dl / len(test_idx),
                          'Test IoU_img': test_iou_img_prc / len(test_idx),
                          'Val IoU DL': val_iou_dl / len(val_idx), 'Val IoU_img': val_iou_img_prc / len(val_idx),
-                         'Train Dice Loss': train_dice_loss / len(train_dataloader),
-                         'Val Dice Loss': val_dice_loss / len(val_dataloader),
-                         'Test_Dice_Loss': test_dice_loss / len(test_dataloader),
-                         'Train SDF Loss': train_sdf_loss / len(train_dataloader),
-                         'Val SDF Loss': val_sdf_loss / len(val_dataloader),
-                         'Test_SDF_Loss': test_sdf_loss / len(test_dataloader),
+                         'Train DL Dice Loss': train_dice_loss / len(train_dataloader),
+                         'Val DL Dice Loss': val_dice_loss / len(val_dataloader),
+                         'Test DL Dice Loss': test_dice_loss / len(test_dataloader),
+                         'Train Img Prc Dice Loss': train_img_proc_dice_loss / len(train_dataloader),
+                         'Val Img Prc Dice Loss': val_image_processing_dice_loss / len(val_dataloader),
+                         'Test Img Prc Dice Loss': test_image_processing_dice_loss / len(test_dataloader),
+                         # 'Train SDF Loss': train_sdf_loss / len(train_dataloader),
+                         # 'Val SDF Loss': val_sdf_loss / len(val_dataloader),
+                         # 'Test_SDF_Loss': test_sdf_loss / len(test_dataloader),
                          })
 
         wandb.finish()
@@ -441,15 +461,7 @@ def extract_foreground_mask(image):
     mask = (R ==2)
     return mask.astype(float)
 
-def convert_labels(input):
 
-        input_label = input
-        #print('Before decoding',torch.unique(input,return_counts = True))
-        input[input_label == 0.0] = 0
-        input[input_label == 1.0] = 2
-        input[(input_label >= 0.25) & (input < 0.75)] =1  #since floating point precision might vary
-        #print('After decoding',torch.unique(input, return_counts=True))
-        return input
 
 def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image_processing_result,betti_error_pred,betti_error_img_prc,tolerance=0,save_path='Simple_Conv_Grayscale_output'):
 

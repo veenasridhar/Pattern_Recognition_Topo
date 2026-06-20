@@ -67,17 +67,6 @@ class simple_Conv(nn.Module):
         return (alpha * sdf_output + avg_output)/2
         #return sdf_output
 
-
-
-def sdf_loss(prediction_softmax, gt_sdf):
-
-    #prediction_softmax = torch.softmax(prediction_logits, dim=1)
-    print('Softmax shape',prediction_softmax.shape)
-    print('gt ssdf',gt_sdf.shape)
-    loss = (prediction_softmax * gt_sdf).mean()
-
-    return loss
-
 def get_persistance_diagram(prob_map):
 
     '''prob_map: numpy (H, W) - Softmax probabilities of the for class 2 (white strutures)'''
@@ -108,41 +97,23 @@ def train_grayscale():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 4
 
-    subbatch_dirs, group_ids = [], []
-    for batch_id, batch_dir in enumerate(sorted(glob.glob('data/Final Data/Bigger Batches of Data SDF'))):  # 18 parent batches
-        for sub in sorted(glob.glob(os.path.join(batch_dir, '*'))):  # its sub-batches
-            subbatch_dirs.append(sub)
-            group_ids.append(batch_id)
-
-    full_dataset = TopoDataset(subbatch_dirs, group_ids)
-    print('Total Sub Batches ', len(full_dataset.items))
-    print("number of views:", len(set(full_dataset.group_of_item)))
-    print("sub-batches per view:", collections.Counter(full_dataset.group_of_item.tolist()))
-
-    #train_dataset,test_dataset = input_pipeline_sdf(single_image_reconstruction=False)
-    #train_indices = np.arange(len(train_dataset))
+    data_dir = 'data/Final Data/Bigger Batches of Data'
+    ground_truth_dir = 'data/Final Data/gt_grayscale_resized'
+    image_processing_dir = 'data/Final Data/image processing resized'
 
     for fold in range (5):
 
+        train_dataset, val_dataset, test_dataset = input_pipeline(data_dir,ground_truth_dir,image_processing_dir, fold)
 
-        train_idx, val_idx, test_idx = grouped_split(full_dataset.group_of_item, fold, ratios=[0.8,0.2,0.1])
-
-        print('Train Index',train_idx)
-        print('Test Index',test_idx)
-        print('Val Index',val_idx)
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2,
+                                      pin_memory=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         model = simple_Conv(5, 3, kernel_size=3, stride=1, padding=1)
         model = model.to(device)
         print(summary(model))
         print('Running on', device)
-
-        if fold > 0:
-            break
-
-        train_dataloader = DataLoader(Subset(full_dataset, train_idx), batch_size=batch_size, shuffle=False)
-        val_dataloader = DataLoader(Subset(full_dataset, val_idx), batch_size=batch_size, shuffle=False)
-        test_dataloader = DataLoader(Subset(full_dataset, test_idx), batch_size = batch_size, shuffle=False)
-
 
         lr = 0.0003
         epochs = 1000
@@ -175,7 +146,6 @@ def train_grayscale():
         for epoch in range(epochs):
 
             model.train()
-            print('Epoch: ',epoch, ' learning rate: ', lr)
             train_loss = 0.0
             train_image_proc_loss = 0.0
             train_cross_entropy_loss = 0.0
@@ -202,7 +172,7 @@ def train_grayscale():
 
 
 
-                output = model(images, avg_output, alpha)
+                output,sdf_pred = model(images, avg_output, alpha)
                 print('Output shape for loss', output.shape)
                 # print('Avg Output shape for loss',avg_output.shape)
 

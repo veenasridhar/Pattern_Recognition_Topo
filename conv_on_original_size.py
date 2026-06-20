@@ -4,16 +4,19 @@ import torchvision
 import torch
 import torch.nn as nn
 import wandb
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader,Subset
 from torchinfo import summary
 import cv2
 from input_pipeline import *
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.ndimage.morphology import binary_dilation
 from scipy.ndimage import distance_transform_edt
 import gudhi
 from cldice_loss import *
 from metrics import compute_betti_numbers
+import collections
 
 
 class simple_Conv(nn.Module):
@@ -28,11 +31,12 @@ class simple_Conv(nn.Module):
         # self.conv_layer5 = nn.Conv2d(64, 16, kernel_size=3, stride=1, padding=1)
         # self.output_layer = nn.Conv2d(16, 3, kernel_size=1)  # Output Channels is 3 for 3 classes in the labels.
 
-        self.conv_layer1 = nn.Conv2d(in_channels, 16, kernel_size=3, stride=1, padding=1)  # 1st layer
-        self.conv_layer2 = nn.Conv2d(16, 32, kernel_size=11, stride=1, padding=5)
-        self.conv_layer3 = nn.Conv2d(32, 64, kernel_size=11, stride=1, padding=5)
-        self.conv_layer4 = nn.Conv2d(64, 32, kernel_size=7, stride=1, padding=3)
-        self.conv_layer5 = nn.Conv2d(32, 16, kernel_size=3, stride=1, padding=1)
+        self.conv_layer1 = nn.Conv2d(in_channels, 16, kernel_size=5, stride=1, padding=2)  # 1st layer
+        self.conv_layer2 = nn.Conv2d(16, 32, kernel_size=7, stride=1, padding=3)
+        self.conv_layer3 = nn.Conv2d(32, 64, kernel_size=7, stride=1, padding=3)
+        self.conv_layer4 = nn.Conv2d(64, 128, kernel_size=7, stride=1, padding=3)
+        self.conv_layer5 = nn.Conv2d(128, 64, kernel_size=5, stride=1, padding=2)
+        self.conv_layer6 = nn.Conv2d(64, 16, kernel_size=5, stride=1, padding=2)
         self.output_layer = nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
 
         self.relu_layer = nn.ReLU()
@@ -48,6 +52,7 @@ class simple_Conv(nn.Module):
         x4 = self.relu_layer(self.conv_layer4(x3))
         x5 = self.relu_layer(self.conv_layer5(x4))
         conv_output = self.output_layer(x5)
+        print(conv_output.shape)
         output = alpha * conv_output + avg_output
 
         #sdf_output = self.sdf_head(x5)
@@ -132,42 +137,65 @@ def topo_loss(pred_diagram, gt_diagram):
         pred_diagram, gt_diagram, order=2
     )
 
+def build_dataset_items(data_directory):
+    batches_list , items = [], []
+    for dirpath, dirnames, filenames in os.walk(data_directory):
+        if any(f.endswith(".png") for f in filenames):                              # a leaf that holds data = a sub-batch
+            rel = os.path.relpath(dirpath, data_directory).split(os.sep)
+            view = os.path.join(*rel[:1])                                           # the main-batch
+            items.append(dirpath)                                                   # Items have the full address of all batches from data directory to final leaf batch
+            batches_list.append(view)
+    uniq = {v: k for k, v in enumerate(sorted(set(batches_list)))}                  #Dictionary of Main batches as keys and a number as the value
+
+    batches_list = np.array([uniq[v] for v in batches_list])                        # Convert the list of batch names (string) into number.
+    assert len(items) > 0, f"no .png-containing folders under {data_directory}"
+    return batches_list, items
 
 def train_grayscale():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    k_fold = KFold(n_splits=5, shuffle=True)
+
     batch_size=1
-    model = simple_Conv(5,3,kernel_size=3, stride=1, padding=1)
-    model = model.to(device)
-    # print(summary(model))
 
+    data_dir = 'data/Final Data/Bigger Batches of Data_original_size'
+    ground_truth_dir = 'data/Final Data/gt_grayscale_original_size'
+    image_processing_dir = 'data/Final Data/Image Processing Original Size Grayscale'
+    batches_list, items = build_dataset_items(data_dir)                   # batches_list is the list of batches as main batch indices [7,7,11,11,11,11,....]
+                                                                         # items is the list of  full address of each batch
+    print('Total Sub Batches ', len(items))
+    print("number of views:", len(set(batches_list)))
+    print("sub-batches per view:", collections.Counter(batches_list.tolist()))
 
-    train_dataset, test_dataset = input_pipeline_original_size(single_image_reconstruction=False)
-    train_indices = np.arange(len(train_dataset))
+    for fold in range(5):
 
-    for fold, (train_index, val_index) in enumerate(k_fold.split(train_indices)):
+        train_idx, val_idx, test_idx = grouped_split(batches_list, fold, ratios=[0.7, 0.2, 0.1])
 
-        train_subset = torch.utils.data.Subset(train_dataset, train_index)
-        val_subset = torch.utils.data.Subset(train_dataset, val_index)
+        print('Train Index', train_idx)
+        print('Test Index', test_idx)
+        print('Val Index', val_idx)
 
-        # Transform the Dataset into DataLoader
-        train_dataloader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=False, num_workers=2,
-                                      pin_memory=True)
-        val_dataloader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=False, num_workers=2,
-                                    pin_memory=True)
-        test_dataloader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False, num_workers=2,
-                                     pin_memory=True)
+        model = simple_Conv(5, 3, kernel_size=3, stride=1, padding=1)
+        model = model.to(device)
+        # print(summary(model))
+
+        train_dataset = TopoDatasetImg(items,train_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir, augment= True)
+        val_dataset = TopoDatasetImg(items,val_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir, augment=False)
+        test_dataset = TopoDatasetImg(items,test_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir,augment=False)
+
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         lr = 0.0003
         epochs = 500
 
         optimizer1 = torch.optim.AdamW(model.parameters(), lr=lr)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=1000, eta_min=1e-5)
         #scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer1,gamma= 0.95)
 
         weights = torch.tensor([0.25, 0.35, 0.5])
         crossentropy_loss = torch.nn.CrossEntropyLoss(weight=weights).to(device)
         cl_dice = soft_dice_cldice()
-        save_parent_dir = 'Residual Convolutional Network Results'
+        save_parent_dir = 'Residual Convolutional Network Results_original size'
 
         run = wandb.init(
             # Set the wandb entity where your project will be logged (generally your team name).
@@ -193,6 +221,7 @@ def train_grayscale():
             train_batch = 0
             train_iou_dl = 0.0
             train_iou_img_prc = 0.0
+            train_img_proc_dice_loss = 0.0
             if epoch < 150:             # For weighing ce_loss and sdf loss
                 alpha = epoch / 200
             else:
@@ -223,15 +252,18 @@ def train_grayscale():
 
                 cross_entropy_loss = crossentropy_loss(output_logits, labels)
                 #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                #dice_loss = cl_dice(targets_onehot,output_softmax)
+                dice_loss = cl_dice(targets_onehot,output_softmax,train_batch)
+                img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),train_batch)
                 # visualise_softmax_prob(output_softmax)
                 # boundary_loss = sdf_loss(output_softmax,gt_sdf_white)
                 #loss = (1-alpha) * cross_entropy_loss_m1 + alpha * boundary_loss
-                loss = cross_entropy_loss
+                loss = cross_entropy_loss +dice_loss
+                train_img_proc_dice_loss += img_processing_dice_loss.item()
+                train_dice_loss += dice_loss.item()
 
                 (loss/accum_steps).backward()
                 if (i + 1) % accum_steps == 0:
-                    #torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer1.step()
                     optimizer1.zero_grad()
 
@@ -271,10 +303,10 @@ def train_grayscale():
                         # plt.close(fig)
                         train_batch += 1
 
-
+            scheduler.step()
             print(f'Train Loss for Epoch {epoch}', train_loss / len(train_dataloader))
-            print('Train IoU for deep learning', train_iou_dl / 95)
-            print('Train IoU for image processing ', train_iou_img_prc / 95)
+            print('Train IoU for deep learning', train_iou_dl / len(train_idx))
+            print('Train IoU for image processing ', train_iou_img_prc / len(train_idx))
 
             # Starting a val loop
             if epoch % 10 == 0:
@@ -287,7 +319,7 @@ def train_grayscale():
                     val_batch = 0
                     val_iou_dl = 0.0
                     val_iou_img_prc = 0.0
-
+                    val_img_proc_dice_loss = 0.0
                     for images, labels, avg_output in val_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
@@ -301,7 +333,7 @@ def train_grayscale():
 
                         output_logits = model(images, avg_output_one_hot, alpha)
                         # output_softmax = torch.softmax(output_logits.detach(), dim=1)[:,2]
-                        # output_softmax = torch.softmax(output_logits.detach(), dim=1)
+                        output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,
                                               dim=1)  # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
@@ -314,14 +346,17 @@ def train_grayscale():
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                        # dice_loss = cl_dice(targets_onehot,output_softmax)
+                        print(output.shape)
+                        dice_loss = cl_dice(targets_onehot,output_softmax,val_batch)
+                        img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),val_batch)
                         # boundary_loss = sdf_loss(output_softmax, gt_sdf_white)
                         # loss = cross_entropy_loss + sdf_loss
-                        loss = cross_entropy_loss
+                        loss = cross_entropy_loss + dice_loss
 
+                        val_img_proc_dice_loss += img_processing_dice_loss
                         # val_cross_entropy_loss += cross_entropy_loss.item()
                         #val_sdf_loss = sdf_loss.item()
-                        # test_dice_loss +=  dice_loss
+                        val_dice_loss +=  dice_loss
                         val_loss += loss.item()
 
                         # if epoch % 10 == 0:
@@ -360,8 +395,8 @@ def train_grayscale():
                             val_batch += 1
 
                     print(f'Val Loss for Epoch {epoch}', val_loss / len(val_dataloader))
-                    print('Val IoU for deep learning', val_iou_dl / 19)
-                    print('Val IoU for image processing ', val_iou_img_prc / 19)
+                    print('Val IoU for deep learning', val_iou_dl / len(val_idx))
+                    print('Val IoU for image processing ', val_iou_img_prc / len(val_idx))
 
             # Starting a test loop
             if epoch % 10 == 0:
@@ -374,6 +409,7 @@ def train_grayscale():
                     test_batch = 0
                     test_iou_dl = 0.0
                     test_iou_img_prc = 0.0
+                    test_image_processing_dice_loss = 0.0
                     if epoch < 250:  # For weighing ce_loss and sdf loss
                         alpha = epoch / 250
                     else:
@@ -389,10 +425,10 @@ def train_grayscale():
 
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
-                        output_logits = model(images, avg_output_one_hot, alpha)
+                        output_logits = model(images, avg_output_one_hot.float(), alpha)
                         #output_logits = output_logits.unsqueeze(0)
                         # output_softmax = torch.softmax(output_logits.detach(), dim=1)[:,2]
-                        # output_softmax = torch.softmax(output_logits.detach(), dim=1)
+                        output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,
                                               dim=1)  # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
@@ -405,14 +441,15 @@ def train_grayscale():
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                        # dice_loss = cl_dice(targets_onehot,output_softmax)
+                        dice_loss = cl_dice(targets_onehot,output_softmax,test_batch)
+                        image_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),test_batch)
                         # boundary_loss = sdf_loss(output_softmax, gt_sdf_white)
                         # loss = cross_entropy_loss + sdf_loss
-                        loss = cross_entropy_loss
-
+                        loss = cross_entropy_loss + dice_loss
+                        test_image_processing_dice_loss += image_processing_dice_loss
                         # test_cross_entropy_loss += cross_entropy_loss.item()
                         #test_sdf_loss += sdf_loss.item()
-                        # test_dice_loss +=  dice_loss
+                        test_dice_loss +=  dice_loss
                         test_loss += loss.item()
 
                         # if epoch %10 == 0:
@@ -450,8 +487,8 @@ def train_grayscale():
                             test_batch += 1
 
                     print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))
-                    print('Test IoU for deep learning', test_iou_dl / 10)
-                    print('Test IoU for image processing ', test_iou_img_prc / 10)
+                    print('Test IoU for deep learning', test_iou_dl / len(test_idx))
+                    print('Test IoU for image processing ', test_iou_img_prc / len(test_idx))
 
                 run.log({'epoch': epoch,
                          'alpha': alpha,
@@ -460,15 +497,16 @@ def train_grayscale():
                          'Test_Total_Loss': test_loss / len(test_dataloader),
                          'Val Loss': val_loss / len(val_dataloader),
                          # 'Train_CE_Loss': train_cross_entropy_loss / len(train_dataloader),'Test_CE_Loss': test_cross_entropy_loss / len(test_dataloader),
-                         # 'Train Loss M1': train_loss_m1 / len(train_dataloader),'Train Loss M2': train_loss_m2 / len(train_dataloader),
-                         # 'Test Loss M1': test_loss_m1 / len(test_dataloader), 'Test Loss M2': test_loss_m2 / len(test_dataloader),
-                         'Train IoU': train_iou_dl / len(train_subset),
-                         'Train IoU_img': train_iou_img_prc / len(train_subset),
-                         'Test IoU': test_iou_dl / len(test_dataset),
-                         'Test IoU_img': test_iou_img_prc / len(test_dataset),
-                         'Val IoU': val_iou_dl / len(val_subset), 'Val IoU img': val_iou_img_prc / len(val_subset),
-                         # 'Val Total Loss': val_vae_loss / len(val_loader),
-                         # 'Train Dice Loss': train_dice_loss / len(train_dataloader), 'Test_Dice_Loss': test_dice_loss / len(test_dataloader),#'Val MSE Loss': val_mse_loss/len(val_loader),
+                         'Train IoU': train_iou_dl / len(train_idx),
+                         'Train IoU_img': train_iou_img_prc / len(train_idx),
+                         'Test IoU': test_iou_dl / len(test_idx),
+                         'Test IoU_img': test_iou_img_prc / len(test_idx),
+                         'Val IoU': val_iou_dl / len(val_idx), 'Val IoU img': val_iou_img_prc / len(val_idx),
+                         'Train_Img_Processing_Dice Loss': train_img_proc_dice_loss/len(train_dataloader),
+                         'Val_Img_Proccessing_Dice Loss': val_img_proc_dice_loss/len(val_dataloader),
+                         'Test_Img_Processing_Dice Loss': test_image_processing_dice_loss/len(test_dataloader),
+                         'Train Dice Loss': train_dice_loss / len(train_dataloader), 'Test_Dice_Loss': test_dice_loss / len(test_dataloader),
+                         'Val Dice Loss': val_dice_loss/len(val_dataloader),
                          })
 
         wandb.finish()
@@ -493,13 +531,10 @@ def convert_labels(input):
 
 def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image_processing_result,betti_error_pred,betti_error_img_prc,tolerance=0,save_path='Simple_Conv_Grayscale_output'):
 
-    #print(predicted_structures.shape)
-    #print(image_processing_result.shape)
+
     red_extracted_structures = extract_red_mask(predicted_structures.unsqueeze(dim = -1).detach().cpu().numpy())
     red_gt_structures = extract_red_mask(gt.unsqueeze(dim = -1).detach().cpu().numpy())
     red_image_processing_structures = extract_red_mask(image_processing_result.permute(1,2,0).detach().cpu().numpy())
-    #print(red_extracted_structures.shape)
-    #print(red_image_processing_structures.shape)
 
     if tolerance>0:
         r = tolerance
@@ -539,25 +574,14 @@ def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image
     print('Predicted IoU ', iou_dilated)
     print('Image Processing IoU ',iou_dilated_image_processing)
 
-    # TP = (red_image_processing_structures * red_gt_structures).sum()
-    # # cv2.imshow('True Positive', (red_extracted_structures ==red_mask_gt).astype(np.float32))
-    # # cv2.waitKey(0)
-    # # cv2.destroyAllWindows()
-    # FP = (red_image_processing_structures * (1 - red_gt_structures)).sum()
-    # FN = ((1 - red_image_processing_structures) * red_gt_structures).sum()
-    #
-    # overlap = np.zeros((*red_extracted_structures.shape, 3))
-    # overlap[..., 0] = (red_image_processing_structures > 0) & (red_gt_structures == 0)  # FP = red
-    # overlap[..., 1] = (red_image_processing_structures > 0) & (red_gt_structures > 0)  # TP = green
-    # overlap[..., 2] = (red_image_processing_structures == 0) & (red_gt_structures > 0)  # FN = blue
     visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,dilated_overlap,red_image_processing_structures,img_proc_dilated_overlap,iou_dilated,iou_dilated_image_processing,betti_error_pred,betti_error_img_prc,save_path)
 
     return iou_dilated,iou_dilated_image_processing
 
 def visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,overlap, image_processing_result,img_proc_dilated_overlap,iou_dilated,iou_dilated_image_processing,betti_error_pred,betti_error_img_prc,save_path='Simple_Conv_Grayscale_output'):
 
-    fig = plt.figure(figsize=(16, 8))
-    grid_spec = fig.add_gridspec(2, 5, hspace=0.2, wspace=0.2)
+    fig = plt.figure(figsize=(16, 12))
+    grid_spec = fig.add_gridspec(2, 5, hspace=0, wspace=0)
 
     for j in range(5):
         ax = fig.add_subplot(grid_spec[0, j])

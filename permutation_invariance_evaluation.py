@@ -7,7 +7,7 @@ from image_processing_approach import *
 import cv2
 import numpy as np
 from siamese_network import *
-from attSets import *
+#from attSets import *
 
 def eval(model):
     #images_path = 'data/batched_data_resized_red/train'

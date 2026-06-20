@@ -1,7 +1,8 @@
+import collections
+
 import cv2
 import torch
-from numba.core import target_extension
-from sentry_sdk.ai.utils import truncate_and_annotate_embedding_inputs
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2
 import torchvision
@@ -12,8 +13,7 @@ import re
 from sklearn.model_selection import KFold,train_test_split
 import numpy as np
 import glob
-
-from baseline_conv_approach import convert_labels
+from torchvision import tv_tensors
 
 
 class SimpleCustomBatch(Dataset):
@@ -362,110 +362,43 @@ class ResidualGrayscaleImageDataset(Dataset):
         return len(self.image_groups)
 
 
-def input_pipeline_residual_grayscale(single_image_reconstruction = False, n_splits=5):
-    '''config_file = open('./config.json')
-    config_data = json.load(config_file)'''
-
-    # Image Transformations
-    train_transformations = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
-        v2.Resize((256, 256)),
-        #v2.Grayscale(num_output_channels=3),                    # Only for VAE approach
-        v2.ToTensor(),
-        # v2.Normalize(mean=(0.5,), std= (1.0,)),
-    ])
-
-    target_transformations = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
-        v2.Resize((256, 256)),
-        v2.ToTensor(),
-        # v2.Normalize(mean=(0.5,), std= (1.0,)),
-    ])
-
-    test_transformations = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),
-        v2.Resize((256, 256)),
-        #v2.Grayscale(num_output_channels=3),                # Only for VAE approach
-        v2.ToTensor(),
-        # v2.Normalize(mean=(0.5,), std= (1.0,)),
-    ])
-
-    train_image_groups = create_image_groups('data/Final Data/batched_data_grayscale_resized/train')
-    train_dataset = ResidualGrayscaleImageDataset(image_groups=train_image_groups,gt_directory='data/Final Data/gt_grayscale_resized/train',image_processing_directory='data/Final Data/Image Processing Results Grayscale/train',sdf_directory= 'data/Final Data/gt_data_sdf/train',
-                                                  image_processing_sdf_directory ='data/Final Data/image_processing_data_sdf/train',transform= train_transformations,target_transform=target_transformations)
-    # train_subset = torch.utils.data.Subset(train_dataset,range(10))
-    test_image_groups = create_image_groups('data/Final Data/batched_data_grayscale_resized/test')
-    test_dataset = ResidualGrayscaleImageDataset(image_groups=test_image_groups, gt_directory='data/Final Data/gt_grayscale_resized/test',image_processing_directory='data/Final Data/Image Processing Results Grayscale/test',sdf_directory= 'data/Final Data/gt_data_sdf/test',
-                                                 image_processing_sdf_directory ='data/Final Data/image_processing_data_sdf/test',transform=test_transformations,target_transform=target_transformations)
-
-    return train_dataset,test_dataset
-
-def input_pipeline_original_size(single_image_reconstruction = False, n_splits=5):
-    '''config_file = open('./config.json')
-    config_data = json.load(config_file)'''
-
-    # Image Transformations
-    train_transformations = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
-        #v2.Resize((256, 256)),
-        #v2.Grayscale(num_output_channels=3),                    # Only for VAE approach
-        v2.ToTensor(),
-        # v2.Normalize(mean=(0.5,), std= (1.0,)),
-    ])
-
-    target_transformations = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
-        #v2.Resize((256, 256)),
-        v2.ToTensor(),
-        # v2.Normalize(mean=(0.5,), std= (1.0,)),
-    ])
-
-    test_transformations = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),
-        #v2.Resize((256, 256)),
-        #v2.Grayscale(num_output_channels=3),                # Only for VAE approach
-        v2.ToTensor(),
-        # v2.Normalize(mean=(0.5,), std= (1.0,)),
-    ])
-
-    train_image_groups = create_image_groups('data/Final Data/batched_data_grayscale_original size/train')
-    train_dataset = ResidualGrayscaleImageDataset(image_groups=train_image_groups,gt_directory='data/Final Data/gt_grayscale_original size/train',image_processing_directory='data/Final Data/Image Processing Original Size Grayscale/train',sdf_directory= 'data/Final Data/gt_data_sdf/train',
-                                                  image_processing_sdf_directory ='data/Final Data/image_processing_data_sdf/train',transform= train_transformations,target_transform=target_transformations)
-    # train_subset = torch.utils.data.Subset(train_dataset,range(10))
-    test_image_groups = create_image_groups('data/Final Data/batched_data_grayscale_original size/test')
-    test_dataset = ResidualGrayscaleImageDataset(image_groups=test_image_groups, gt_directory='data/Final Data/gt_grayscale_original size/test',image_processing_directory='data/Final Data/Image Processing Original Size Grayscale/test',sdf_directory= 'data/Final Data/gt_data_sdf/test',
-                                                 image_processing_sdf_directory ='data/Final Data/image_processing_data_sdf/test',transform=test_transformations,target_transform=target_transformations)
-
-    return train_dataset,test_dataset
-
-
-
 def natural_sort_key(s):
     # Splits "Batch 11" into ["Batch ", 11] so sorting is numeric-aware
     return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', s)]
 
-import numpy as np
+def build_dataset_items(data_directory):
+    batches_list , items = [], []
+    for dirpath, dirnames, filenames in os.walk(data_directory):
+        if any(f.endswith(".png") for f in filenames):                              # a leaf that holds data = a sub-batch
+            rel = os.path.relpath(dirpath, data_directory).split(os.sep)
+            view = os.path.join(*rel[:1])                                           # the main-batch
+            items.append(dirpath)                                                   # Items have the full address of all batches from data directory to final leaf batch
+            batches_list.append(view)
+    uniq = {v: k for k, v in enumerate(sorted(set(batches_list)))}                  #Dictionary of Main batches as keys and a number as the value
 
-# def grouped_split(group_of_item, fold, ratios=(0.7, 0.2, 0.1), seed_base=0):
-#     group_of_item = np.asarray(group_of_item)
-#     groups = np.unique(group_of_item)
-#     sizes = {g: int((group_of_item == g).sum()) for g in groups}
-#     total = len(group_of_item)
-#     targets = np.array(ratios) * total            # target sample counts: train/test/val
-#
-#     rng = np.random.default_rng(seed_base + fold)  # different order each fold
-#     order = rng.permutation(groups)
-#
-#     assigned = {0: set(), 1: set(), 2: set()}      # 0=train, 1=test, 2=val
-#     counts = np.zeros(3)
-#     for g in order:
-#         deficit = (targets - counts) / targets     # who's most under quota
-#         s = int(np.argmax(deficit))
-#         assigned[s].add(g)
-#         counts[s] += sizes[g]
-#
-#     idx = lambda s: np.array([i for i, g in enumerate(group_of_item) if g in assigned[s]])
-#     return idx(0), idx(1), idx(2)                   # train, test, val
+    batches_list = np.array([uniq[v] for v in batches_list])                        # Convert the list of batch names (string) into number.
+    assert len(items) > 0, f"no .png-containing folders under {data_directory}"
+    return batches_list, items
+
+def input_pipeline(data_directory, ground_truth_dir, image_processing_dir, fold):
+
+    batches_list, items = build_dataset_items(data_directory)
+
+    print('Total Sub Batches ', len(items))
+    print("number of views:", len(set(batches_list)))
+    print("sub-batches per view:", collections.Counter(batches_list.tolist()))
+
+    train_idx, val_idx, test_idx = grouped_split(batches_list, fold, ratios=[0.7, 0.2, 0.1])
+
+    print('Train Index', train_idx)
+    print('Test Index', test_idx)
+    print('Val Index', val_idx)
+
+    train_dataset = TopoDatasetImg(items, train_idx, ground_truth_dir, image_processing_dir, augment=True)
+    val_dataset = TopoDatasetImg(items, val_idx, ground_truth_dir, image_processing_dir, augment=False)
+    test_dataset = TopoDatasetImg(items, test_idx, ground_truth_dir, image_processing_dir, augment=False)
+
+    return train_dataset,val_dataset,test_dataset
 
 
 def create_numpy_groups(image_directory):
@@ -481,24 +414,17 @@ def create_numpy_groups(image_directory):
         # print(image_groups)
     return image_groups
 
-import numpy as np
+
 
 def grouped_split(group_of_item, fold, ratios=(0.7, 0.2, 0.1), seed_base=0):
     group_of_item = np.asarray(group_of_item)
-    print('group_of_item',group_of_item)
     groups = np.unique(group_of_item)
-    print('Groups:',groups)
     sizes = {g: int((group_of_item == g).sum()) for g in groups}
-    print('Sizes: ',sizes)
     total = len(group_of_item)
-    print('Total: ',total)
-    targets = np.array(ratios) * total            # target sample counts: train/test/val
-    print('Target Ratios',targets)
+    targets = np.array(ratios) * total            # target sample counts: train/test/val [84, 21, 10.5]
 
-    rng = np.random.default_rng(seed_base + fold)  # different order each fold
-    print ('Range',rng)
-    order = rng.permutation(groups)
-    print('Order', order)
+    rng = np.random.default_rng(seed_base + fold)  # Range Generator
+    order = rng.permutation(groups)             #[ 2 10  3 12  0  4  7  5 16 13 14 11  6  9 17  8  1 15] - different main batch order for  each fold
 
     assigned = {0: set(), 1: set(), 2: set()}      # 0=train, 1=test, 2=val
     counts = np.zeros(3)
@@ -510,6 +436,7 @@ def grouped_split(group_of_item, fold, ratios=(0.7, 0.2, 0.1), seed_base=0):
 
     idx = lambda s: np.array([i for i, g in enumerate(group_of_item) if g in assigned[s]])
     train_idx, test_idx, val_idx = idx(0), idx(1), idx(2)  # train, val,test
+
     id_to_group = {0: 'Anowas V4 Bottom', 1: 'Anowas V4 Side View' ,2:'Anowas V4 Top', 3:'Bottom Inside View V3', 4:'Bottom View MW',
                    5: 'Bottom View V3',6: 'Front View V3', 7:'Intermediate Floor V3', 8: 'Jermias Side', 9:'Jermias_bottom', 10: 'Rear View MW',
                    11: 'Side View MW', 12: 'Side View V3', 13: 'Top View V3', 14: 'gen WK Front', 15: 'gen WK Side', 16: 'gen WK Top', 17: 'gn WK Bottom'}
@@ -523,10 +450,10 @@ def grouped_split(group_of_item, fold, ratios=(0.7, 0.2, 0.1), seed_base=0):
     with open(f"split_fold{fold}.json", "w") as f:
         json.dump(split_log, f, indent=2)
 
-
     assert not (set(group_of_item[train_idx]) & set(group_of_item[test_idx]))
     assert not (set(group_of_item[train_idx]) & set(group_of_item[val_idx]))
     assert not (set(group_of_item[test_idx]) & set(group_of_item[val_idx]))
+
     return train_idx, test_idx, val_idx
 
 class SDFDataset(Dataset):
@@ -596,109 +523,67 @@ def input_pipeline_sdf(fold):
 
     return train_dataset, test_dataset
 
-def list_dirs(p):
-    return sorted(d for d in glob.glob(os.path.join(p, '*')) if os.path.isdir(d))
-
-class TopoDataset(Dataset):
-    def __init__(self, subbatch_dirs, group_ids):
-        self.items, self.group_of_item = [], []
-        for dirpath, dirnames, filenames in os.walk('data/Final Data/Bigger Batches of Data SDF'):
-            if any(f.endswith(".npy") for f in filenames):  # a leaf that holds data = a sub-batch
-                rel = os.path.relpath(dirpath, 'data/Final Data/Bigger Batches of Data SDF').split(os.sep)
-                view = os.path.join(*rel[:1])  # the main-batch / view id
-                self.items.append(dirpath)
-                self.group_of_item.append(view)
-        uniq = {v: k for k, v in enumerate(sorted(set(self.group_of_item)))}
-        print('Unique',uniq)
-        self.group_of_item = np.array([uniq[v] for v in self.group_of_item])
-        assert len(self.items) > 0, f"no .npy-containing folders under {'data/Final Data/Bigger Batches of Data SDF'}"
-    def __len__(self):
-        return len(self.items)
-
-    def __getitem__(self, i):
-        sub_dir = self.items[i]
-        print('Sub Directory',sub_dir)
-        sub = (sub_dir.split('/')[-1]).split(' ')[-1]
-        image_files = sorted(glob.glob(os.path.join(sub_dir, f'*.npy')))  # the 5 images
-        print('Image Files',image_files)
-        images = torch.stack([torch.from_numpy(np.load(f)).float() for f in image_files], dim=0)  # [5,H,W]
-
-        labels = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches GT SDF', f'gt_{sub}.npy')))
-        avg_output = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing SDF', f'image_{sub}.npy')))
-        #sdf = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing', f'sdf_{sub}.npy'))).float()
-        return images, labels, avg_output
-
+def permute_views(x):
+    return x.index_select(-3, torch.randperm(x.shape[-3]))
 
 class TopoDatasetImg(Dataset):
-    def __init__(self, subbatch_dirs, group_ids):
-        self.items, self.group_of_item = [], []
+    def __init__(self, subbatch_dirs, idx, ground_truth_dir, img_proc_dir ,augment):
+
+        self.subbatch_dirs = subbatch_dirs
+        self.indices = idx
+        self.ground_truth_dir = ground_truth_dir
+        self.img_proc_dir = img_proc_dir
+        self.augment = augment
         # Image Transformations
         self.train_transformations = v2.Compose([
-            v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
-            v2.Resize((256, 256)),
+            v2.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.float32}, scale=True),  # Scale = true already scales the images between 0,1.
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.Lambda(permute_views, tv_tensors.Image),
+            #v2.Resize((256, 256)),
             # v2.Grayscale(num_output_channels=3),                    # Only for VAE approach
             v2.ToTensor(),
-            # v2.Normalize(mean=(0.5,), std= (1.0,)),
         ])
-
-        self.target_transformations = v2.Compose([
-            v2.ToDtype(torch.float32, scale=True),  # Scale = true already scales the images between 0,1.
-            # v2.Resize((256, 256)),
-            v2.ToTensor(),
-            # v2.Normalize(mean=(0.5,), std= (1.0,)),
-        ])
-
         self.test_transformations = v2.Compose([
             v2.ToDtype(torch.float32, scale=True),
-            v2.Resize((256, 256)),
+            #v2.Resize((256, 256)),
             # v2.Grayscale(num_output_channels=3),                # Only for VAE approach
             v2.ToTensor(),
             # v2.Normalize(mean=(0.5,), std= (1.0,)),
         ])
-        for dirpath, dirnames, filenames in os.walk('data/Final Data/Bigger Batches of Data'):
-            if any(f.endswith(".png") for f in filenames):  # a leaf that holds data = a sub-batch
-                rel = os.path.relpath(dirpath, 'data/Final Data/Bigger Batches of Data').split(os.sep)
-                view = os.path.join(*rel[:1])  # the main-batch / view id
-                self.items.append(dirpath)
-                self.group_of_item.append(view)
-        uniq = {v: k for k, v in enumerate(sorted(set(self.group_of_item)))}
-        print('Unique',uniq)
-        self.group_of_item = np.array([uniq[v] for v in self.group_of_item])
-        assert len(self.items) > 0, f"no .png-containing folders under {'data/Final Data/Bigger Batches of Data'}"
 
     def __len__(self):
-        return len(self.items)
+        return len(self.indices)
+
 
     def convert_labels(self,input):
 
         input = input.clone()
-        input[input < 0.25] = 0
-        input[input > 0.75] = 2
-        input[(input >= 0.25) & (input < 0.75)] =1  #since floating point precision might vary
+        input[input < 115.0] = 0
+        input[input > 200.0] = 2
+        input[(input >= 115.0) & (input <= 200.0)] =1  #since floating point precision might vary
         return input.long()
 
     def __getitem__(self, i):
-        sub_dir = self.items[i]
-        print('Sub Directory',sub_dir)
+        index = self.indices[i]
+        sub_dir = self.subbatch_dirs[index]
         sub = (sub_dir.split('/')[-1]).split(' ')[-1]
         image_files = sorted(glob.glob(os.path.join(sub_dir, f'*.png')))  # the 5 images
-        print('Image Files',image_files)
-        images = torch.cat([self.train_transformations(torchvision.io.decode_image(f,torchvision.io.ImageReadMode.GRAY)) for f in image_files], dim=0)  # [5,H,W]
-        print(images.shape)
-        print(images[0].unique())
-
-
-        labels = torchvision.io.decode_image(os.path.join('data/Final Data/gt_grayscale_resized', f'gt {sub}.png'),torchvision.io.ImageReadMode.GRAY)
-        print(labels.shape)
-        labels = self.target_transformations(labels)
-        print(labels.unique())
+        images = torch.cat([torchvision.io.decode_image(f,torchvision.io.ImageReadMode.GRAY) for f in image_files], dim=0)  # [5,H,W]
+        images = tv_tensors.Image(images)
+        labels = torchvision.io.decode_image(os.path.join(self.ground_truth_dir, f'gt {sub}.png'),torchvision.io.ImageReadMode.GRAY)
+        labels = tv_tensors.Mask(labels)
+        avg_output = torchvision.io.decode_image(os.path.join(self.img_proc_dir, f'result_{sub}.png'),torchvision.io.ImageReadMode.GRAY)
+        avg_output = tv_tensors.Mask(avg_output)
+        if self.augment:
+            images, labels,avg_output = self.train_transformations(images,labels,avg_output)
+        else:
+            images, labels, avg_output = self.test_transformations(images, labels, avg_output)
+        print('Labels unique', labels.unique())
+        print('Avg Output', avg_output.unique())
         labels = self.convert_labels(labels)
-        print('Labels UNique',labels.unique())
-        avg_output = torchvision.io.decode_image(os.path.join('data/Final Data/image processing resized', f'result_{sub}.png'),torchvision.io.ImageReadMode.GRAY)
-        print(avg_output.shape)
-        avg_output = self.target_transformations(avg_output)
         avg_output = self.convert_labels(avg_output)
-        print(avg_output.unique())
+        print('Labels unique',labels.unique())
+        print('Avg Output',avg_output.unique() )
         #sdf = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing', f'sdf_{sub}.npy'))).float()
         return images, labels, avg_output
 
