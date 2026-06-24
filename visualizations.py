@@ -133,53 +133,62 @@ def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, origin
         fig = plt.figure(figsize=(16, 8))
         grid_spec = fig.add_gridspec(2, 5, hspace=0.1, wspace=0.1)
 
-        for j in range(5):
-            ax = fig.add_subplot(grid_spec[0, j])
-            print(original.shape)
-            orig_img = original[j].permute(1, 2, 0).detach().cpu().numpy()
-            ax.imshow(orig_img)
-            ax.axis('off')
+        for i in range(len(original)):
+            H, W = original[i].shape[-2], original[i].shape[-1]
+            ar = H / W
+            ncols, nrows = 5, 2
+            fig_w = 16
+            fig_h = fig_w * (nrows / ncols) * ar + 0.9  # +0.9" headroom for the row-1 titles
+            fig = plt.figure(figsize=(fig_w, fig_h),constrained_layout=True)
+            grid_spec = fig.add_gridspec(nrows, ncols, hspace=0.5, wspace=0.3)
 
-        ax_center = fig.add_subplot(grid_spec[1, 1])
-        #recon_images = reconstructed_image.detach().cpu().numpy()
-        recon_images = reconstructed_image.permute(1, 2, 0).detach().cpu().numpy()
-        ax_center.imshow(recon_images,cmap='gray')
-        ax_center.axis('off')
-        ax_center.set_title('Reconstructed Image')
+            for j in range(5):
+                ax = fig.add_subplot(grid_spec[0, j])
+                orig_img = original[j].permute(1, 2, 0).detach().cpu().numpy()
+                ax.imshow(orig_img,aspect = 'auto')
+                ax.axis('off')
 
-        ax_left = fig.add_subplot(grid_spec[1, 0])
-        gt_image_visual = gt_image.permute(1, 2, 0).detach().cpu().numpy()
-        ax_left.imshow(gt_image_visual,cmap='gray')
-        ax_left.axis('off')
-        ax_left.set_title('Ground Truth')
+            ax_center = fig.add_subplot(grid_spec[1, 1])
+            #recon_images = reconstructed_image.detach().cpu().numpy()
+            recon_images = reconstructed_image.permute(1, 2, 0).detach().cpu().numpy()
+            ax_center.imshow(recon_images,cmap='gray',aspect = 'auto')
+            ax_center.axis('off')
+            ax_center.set_title('Reconstructed Image')
 
-        ax_left = fig.add_subplot(grid_spec[1, 2])
-        #print(image_processing_result.shape)
-        img_prc_result = image_processing_result.permute(1, 2, 0).detach().cpu().numpy()
-        ax_left.imshow(img_prc_result, cmap='gray')
-        ax_left.axis('off')
-        ax_left.set_title('Pixelwise Averaging Result')
+            ax_left = fig.add_subplot(grid_spec[1, 0])
+            #gt_image_visual = gt_image.detach().cpu().numpy()
+            gt_image_visual = gt_image.permute(1, 2, 0).detach().cpu().numpy()
+            ax_left.imshow(gt_image_visual,cmap='gray',aspect = 'auto')
+            ax_left.axis('off')
+            ax_left.set_title('Ground Truth')
 
-        ax_left = fig.add_subplot(grid_spec[1, 3])
-        #img_prc_result = image_processing_result[i].permute(1, 2, 0).detach().cpu().numpy()
-        ax_left.imshow(dilated_overlap)
-        ax_left.axis('off')
-        ax_left.set_title(f'IoU DL: {iou_dilated:.2f}')
+            ax_left = fig.add_subplot(grid_spec[1, 2])
+            #print(image_processing_result.shape)
+            img_prc_result = image_processing_result.permute(1, 2, 0).detach().cpu().numpy()
+            ax_left.imshow(img_prc_result, cmap='gray',aspect = 'auto')
+            ax_left.axis('off')
+            ax_left.set_title('Pixelwise Averaging Result')
 
-        ax_left = fig.add_subplot(grid_spec[1, 4])
-        # img_prc_result = image_processing_result[i].permute(1, 2, 0).detach().cpu().numpy()
-        ax_left.imshow(img_proc_dilated_overlap)
-        ax_left.axis('off')
-        ax_left.set_title(f'IoU Pixelwise Avergaing: {iou_dilated_image_processing:.2f}')
+            ax_left = fig.add_subplot(grid_spec[1, 3])
+            #img_prc_result = image_processing_result[i].permute(1, 2, 0).detach().cpu().numpy()
+            ax_left.imshow(dilated_overlap,aspect = 'auto')
+            ax_left.axis('off')
+            ax_left.set_title(f'IoU DL: {iou_dilated:.2f}')
 
-        # ax_left = fig.add_subplot(grid_spec[1, 3])
-        # ax_left.imshow(image_processing_result, cmap='gray')
-        # ax_left.axis('off')
-        # ax_left.set_title('Image Processing Result')
+            ax_left = fig.add_subplot(grid_spec[1, 4])
+            # img_prc_result = image_processing_result[i].permute(1, 2, 0).detach().cpu().numpy()
+            ax_left.imshow(img_proc_dilated_overlap,aspect = 'auto')
+            ax_left.axis('off')
+            ax_left.set_title(f'IoU Pixelwise Avergaing: {iou_dilated_image_processing:.2f}')
 
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_path, f'reconstructed_images_{epoch}_{batch}_{index}.png'), dpi=150)
-        plt.close()
+            # ax_left = fig.add_subplot(grid_spec[1, 3])
+            # ax_left.imshow(image_processing_result, cmap='gray')
+            # ax_left.axis('off')
+            # ax_left.set_title('Image Processing Result')
+
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_path, f'reconstructed_images_{epoch}_{batch}_{index}.png'), dpi=150)
+            plt.close()
     else:
 
         num_images = reconstructed_image.shape[0]

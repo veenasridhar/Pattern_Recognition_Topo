@@ -10,6 +10,7 @@ import cv2
 from input_pipeline import *
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from scipy.ndimage.morphology import binary_dilation
 from scipy.ndimage import distance_transform_edt
@@ -51,7 +52,8 @@ class simple_Conv(nn.Module):
         x3 = self.relu_layer(self.conv_layer3(x2))
         x4 = self.relu_layer(self.conv_layer4(x3))
         x5 = self.relu_layer(self.conv_layer5(x4))
-        conv_output = self.output_layer(x5)
+        x6 = self.relu_layer(self.conv_layer6(x5))
+        conv_output = self.output_layer(x6)
         print(conv_output.shape)
         output = alpha * conv_output + avg_output
 
@@ -156,8 +158,8 @@ def train_grayscale():
 
     batch_size=1
 
-    data_dir = 'data/Final Data/Bigger Batches of Data_original_size'
-    ground_truth_dir = 'data/Final Data/gt_grayscale_original_size'
+    data_dir = 'data/Bigger Batches of Data_original_size'
+    ground_truth_dir = 'data/Edited Ground Truth_ Encoded'
     image_processing_dir = 'data/Final Data/Image Processing Original Size Grayscale'
     batches_list, items = build_dataset_items(data_dir)                   # batches_list is the list of batches as main batch indices [7,7,11,11,11,11,....]
                                                                          # items is the list of  full address of each batch
@@ -580,8 +582,12 @@ def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image
 
 def visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,overlap, image_processing_result,img_proc_dilated_overlap,iou_dilated,iou_dilated_image_processing,betti_error_pred,betti_error_img_prc,save_path='Simple_Conv_Grayscale_output'):
 
-    fig = plt.figure(figsize=(16, 12))
-    grid_spec = fig.add_gridspec(2, 5, hspace=0, wspace=0)
+    H, W = raw_images.shape[-2], raw_images.shape[-1]
+    ar = H / W
+    fig_w = 16
+    fig_h = fig_w * (2 / 5) * ar + 0.9  # +0.9" headroom for the row-1 titles
+    fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
+    grid_spec = fig.add_gridspec(2, 5, hspace=0.05, wspace=0.2)
 
     for j in range(5):
         ax = fig.add_subplot(grid_spec[0, j])
@@ -597,12 +603,12 @@ def visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,overlap
 
     ax = fig.add_subplot(grid_spec[1, 1])
     ax.imshow(predicted_structures.detach().cpu().numpy(),cmap='gray',vmin=0,vmax=2)
-    ax.set_title('Predicted Dilated Structure')
+    ax.set_title('Predicted Structure')
     ax.axis('off')
 
     ax = fig.add_subplot(grid_spec[1, 2])
     ax.imshow(overlap)
-    ax.set_title(f'IOU: {iou_dilated:0.2f} \n Betti Number: {betti_error_pred}')
+    ax.set_title(f'IOU: {iou_dilated:0.2f} ')
     ax.axis('off')
 
     ax = fig.add_subplot(grid_spec[1, 3])
@@ -613,9 +619,23 @@ def visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,overlap
 
     ax = fig.add_subplot(grid_spec[1, 4])
     ax.imshow(img_proc_dilated_overlap)
-    ax.set_title(f'IOU: {iou_dilated_image_processing:0.2f} \n Betti Number: {betti_error_pred}')
+    ax.set_title(f'IOU: {iou_dilated_image_processing:0.2f} ')
     ax.axis('off')
 
+    # Single shared legend for the entire bottom row
+    legend_patches = [
+        mpatches.Patch(color='green', label='True Positive'),
+        mpatches.Patch(color='blue', label='False Negative'),
+        mpatches.Patch(color='red', label='False Positive'),
+    ]
+    fig.legend(
+        handles=legend_patches,
+        loc='lower center',
+        ncol=3,  # all three side by side in one row
+        fontsize=15,
+        framealpha=0.6,
+        bbox_to_anchor=(0.5, 0.05),  # centred horizontally, just below the figure
+    )
     plt.tight_layout()
     #plt.show()
     if not os.path.exists(os.path.join(save_path, 'Epoch ' + str(epoch),'IoU Metric')):

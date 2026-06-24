@@ -40,24 +40,28 @@ def main():
 
     elif baseline == 'Train':
 
-        batch_size =4
-        data_dir = 'data/Final Data/Bigger Batches of Data'
-        ground_truth_dir = 'data/Final Data/gt_grayscale_resized'
-        image_processing_dir = 'data/Final Data/image processing resized'
-
+        batch_size =1
+        data_dir = 'data/Batches'
+        ground_truth_dir = 'data/Ground_Truth_resized'
+        image_processing_dir = 'data/image_processing_results'
+        single_image_reconstruction = False
         wandb.login()
 
         for fold in range(5):
 
-            train_dataset, val_dataset, test_dataset = input_pipeline(data_dir, ground_truth_dir, image_processing_dir, fold)
+            train_dataset, val_dataset, test_dataset = input_pipeline_vae(data_dir, ground_truth_dir, image_processing_dir, fold, single_image_reconstruction=single_image_reconstruction)
 
             # Transform the Dataset into DataLoader
             train_dataloader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
             val_dataloader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
             test_dataloader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
+            print(len(train_dataloader))
+            print(len(val_dataloader))
+            print(len(test_dataloader))
 
-            vae_tuner = VAEGANFineTuner(model_name='stabilityai/sd-vae-ft-mse',multi_image_mode=True)
+            vae_tuner = VAEGANFineTuner(model_name='./finetuned_vae/individually_trained_models_grayscale',multi_image_mode=True)
+            #vae_tuner = VAEGANFineTuner(model_name='stabilityai/sd-vae-ft-mse',multi_image_mode=False)
             #soft_aggregator = SetAggregation()
 
             print(f'*--------------Fold {fold}--------------------------')

@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 from diffusers import AutoencoderKL
+from torch.cuda import device
 from tqdm import tqdm
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 #from VAE_Perceptual_Loss import VGGPerceptualLoss
@@ -20,19 +21,20 @@ class AttSets(nn.Module):
         self.score_net = nn.Sequential(
             nn.Conv2d(in_channels=latent_channels, out_channels=16, kernel_size=3,padding=1),
             nn.ReLU(),
-            #nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3,padding=1),
-            #nn.ReLU(),
+            # nn.Conv2d(in_channels=16, out_channels=16, kernel_size=3,padding=1),
+            # nn.ReLU(),
             nn.Conv2d(in_channels = 16, out_channels = 4, kernel_size=3,padding=1),
             #nn.Sigmoid()
         )
+        self.score_net = self.score_net .to(torch.device("cuda"))
 
-    def forward(self,input_latents,num_imgs=5,batch_size=batch_size):
+    def forward(self,input_latents,num_imgs=5,batch_size=4):
 
         '''Method-1
         This method weights individual images separately (sigmoid activations) and multiplies with its own input latent representations before going through the aggregation
          Finally for aggregation it sums it along the first dimension in (B,N,C,H,W) i.e along the number of images in each batch.'''
 
-        #print('The shape of the input latents',input_latents.shape)
+        print('The shape of the input latents',input_latents.dtype)
 
         scores = self.score_net(input_latents)  # Size = (B*N,C,H,W)
 
