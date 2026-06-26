@@ -1,5 +1,6 @@
 import cv2
 import torch
+from skimage.morphology import skeletonize
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 import os
 import matplotlib
@@ -41,62 +42,95 @@ def extract_foreground_mask(image):
         channel1 = image[:,:,0]
         channel2 = image[:,:,1]
         channel3 = image[:,:,2]
-        mask = (channel1 >= 0.7) & (channel2  >= 0.7) & (channel3 >= 0.7)
+        print(np.unique(channel1))
+        mask = (channel1 >= 0.6) & (channel2  >= 0.6) & (channel3 >= 0.6)
         # R = image[:, :, 0]
         # G = image[:, :, 1]
         # mask = (R < 0.2)
     return mask.astype(float)
 
+
+def cldice_metric(predicted_binary,gt_binary,img_prc_binary,):
+
+    predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+    gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+    img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+
+    cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
+    cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+    cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+
+    cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+    cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+    cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+    return cl_dice_dl, cl_dice_img_prc
+
 def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image_processing_result,tolerance=0,save_path='Simple_Conv_Grayscale_output'):
 
     print(predicted_structures.shape)
     print(image_processing_result.shape)
-    red_extracted_structures = extract_foreground_mask(predicted_structures.permute(1,2,0).detach().cpu().numpy())
+    predicted_binary = extract_foreground_mask(predicted_structures.permute(1,2,0).detach().cpu().numpy())
     #red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
-    red_gt_structures = extract_foreground_mask(gt.permute(1,2,0).detach().cpu().numpy())
-    red_image_processing_structures = extract_foreground_mask(image_processing_result.permute(1,2,0).detach().cpu().numpy())
+    gt_binary = extract_foreground_mask(gt.permute(1,2,0).detach().cpu().numpy())
+    img_prc_binary = extract_foreground_mask(image_processing_result.permute(1,2,0).detach().cpu().numpy())
+
+    predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+    gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+    img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+
+    cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
+    cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+    cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+
+    cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+    cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+    cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
 
 
-    if tolerance>0:
-        r = tolerance
-        y, x = np.ogrid[-r:r + 1, -r:r + 1]
-        circle = (x ** 2 + y ** 2 <= r ** 2)
-        predicted_dilated_structure = binary_dilation(red_extracted_structures.astype(bool), structure=circle)
-        target_dilated_structure = binary_dilation(red_gt_structures.astype(bool), structure=circle)
-        image_processing_structures = binary_dilation(red_image_processing_structures.astype(bool), structure=circle)
-    else:
-        predicted_dilated_structure = red_extracted_structures
-        target_dilated_structure = red_gt_structures
-        image_processing_structures = red_image_processing_structures
 
-    TP = (predicted_dilated_structure * target_dilated_structure).sum()
-    FP = (predicted_dilated_structure * (1 - target_dilated_structure)).sum()
-    FN = ((1 - predicted_dilated_structure) * target_dilated_structure).sum()
-
-    dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
-    dilated_overlap[..., 0] = (predicted_dilated_structure > 0) & (target_dilated_structure == 0)  # FP = red
-    dilated_overlap[..., 1] = (predicted_dilated_structure > 0) & (target_dilated_structure > 0)  # TP = green
-    dilated_overlap[..., 2] = (predicted_dilated_structure == 0) & (target_dilated_structure > 0)  # FN = blue
-
-    iou_dilated = TP / (TP + FP + FN + 1e-8)
+    return cl_dice_dl, cl_dice_img_prc,  cldice_overlay_img_prc
 
 
-    TP = (image_processing_structures * target_dilated_structure).sum()
-    FP = (image_processing_structures * (1 - target_dilated_structure)).sum()
-    FN = ((1 - image_processing_structures) * target_dilated_structure).sum()
+    # if tolerance>0:
+    #     r = tolerance
+    #     y, x = np.ogrid[-r:r + 1, -r:r + 1]
+    #     circle = (x ** 2 + y ** 2 <= r ** 2)
+    #     predicted_dilated_structure = binary_dilation(red_extracted_structures.astype(bool), structure=circle)
+    #     target_dilated_structure = binary_dilation(red_gt_structures.astype(bool), structure=circle)
+    #     image_processing_structures = binary_dilation(red_image_processing_structures.astype(bool), structure=circle)
+    # else:
+    #     predicted_dilated_structure = red_extracted_structures
+    #     target_dilated_structure = red_gt_structures
+    #     image_processing_structures = red_image_processing_structures
+    #
+    # TP = (predicted_dilated_structure * target_dilated_structure).sum()
+    # FP = (predicted_dilated_structure * (1 - target_dilated_structure)).sum()
+    # FN = ((1 - predicted_dilated_structure) * target_dilated_structure).sum()
+    #
+    # dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
+    # dilated_overlap[..., 0] = (predicted_dilated_structure > 0) & (target_dilated_structure == 0)  # FP = red
+    # dilated_overlap[..., 1] = (predicted_dilated_structure > 0) & (target_dilated_structure > 0)  # TP = green
+    # dilated_overlap[..., 2] = (predicted_dilated_structure == 0) & (target_dilated_structure > 0)  # FN = blue
+    #
+    # iou_dilated = TP / (TP + FP + FN + 1e-8)
+    #
+    #
+    # TP = (image_processing_structures * target_dilated_structure).sum()
+    # FP = (image_processing_structures * (1 - target_dilated_structure)).sum()
+    # FN = ((1 - image_processing_structures) * target_dilated_structure).sum()
 
-    img_proc_dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
-    img_proc_dilated_overlap[..., 0] = (image_processing_structures > 0) & (target_dilated_structure == 0)  # FP = red
-    img_proc_dilated_overlap[..., 1] = (image_processing_structures > 0) & (target_dilated_structure > 0)  # TP = green
-    img_proc_dilated_overlap[..., 2] = (image_processing_structures == 0) & (target_dilated_structure > 0)  # FN = blue
+    # img_proc_dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
+    # img_proc_dilated_overlap[..., 0] = (image_processing_structures > 0) & (target_dilated_structure == 0)  # FP = red
+    # img_proc_dilated_overlap[..., 1] = (image_processing_structures > 0) & (target_dilated_structure > 0)  # TP = green
+    # img_proc_dilated_overlap[..., 2] = (image_processing_structures == 0) & (target_dilated_structure > 0)  # FN = blue
+    #
+    # iou_dilated_image_processing = TP / (TP + FP + FN + 1e-8)
 
-    iou_dilated_image_processing = TP / (TP + FP + FN + 1e-8)
-
-    print('Predicted IoU ', iou_dilated)
-    print('Image Processing IoU ',iou_dilated_image_processing)
+    # print('Predicted IoU ', iou_dilated)
+    # print('Image Processing IoU ',iou_dilated_image_processing)
 
 
-    return iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap
+#    return iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap
 
 def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, original, gt_image, image_processing_result, iou_dilated,iou_dilated_image_processing,dilated_overlap,
                                          img_proc_dilated_overlap, save_path, index,test=False):

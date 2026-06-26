@@ -76,10 +76,16 @@ class soft_dice_cldice(nn.Module):
         if self.exclude_background:
             y_true = y_true[:, 2:, :, :]
             y_pred = y_pred[:, 2:, :, :]
+            print(y_pred)
         dice = dice_coeff(y_true, y_pred)
         skel_pred = self.soft_skeletonize(y_pred)
-        print(skel_pred.shape)
+        # cv2.imshow('Pred',skel_pred)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
         skel_true = self.soft_skeletonize(y_true)
+        # cv2.imshow('True', skel_true)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
         fig, ax = plt.subplots(1,2,figsize=(10,5))
 
         ax[0].imshow(skel_true[0].permute(1,2,0).detach().cpu().numpy())
@@ -94,3 +100,4 @@ class soft_dice_cldice(nn.Module):
         tsens = (torch.sum(torch.multiply(skel_true, y_pred))+self.smooth)/(torch.sum(skel_true)+self.smooth)
         cl_dice = 1.- 2.0*(tprec*tsens)/(tprec+tsens)
         return (1.0-self.alpha)*dice+self.alpha*cl_dice
+

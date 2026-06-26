@@ -60,12 +60,12 @@ def main():
             print(len(val_dataloader))
             print(len(test_dataloader))
 
-            vae_tuner = VAEGANFineTuner(model_name='./finetuned_vae/individually_trained_models_grayscale',multi_image_mode=True)
-            #vae_tuner = VAEGANFineTuner(model_name='stabilityai/sd-vae-ft-mse',multi_image_mode=False)
+            #vae_tuner = VAEGANFineTuner(model_name='./finetuned_vae/individually_trained_models_grayscale',multi_image_mode=True)
+            vae_tuner = VAEGANFineTuner(model_name='stabilityai/sd-vae-ft-mse',multi_image_mode=True)
             #soft_aggregator = SetAggregation()
 
             print(f'*--------------Fold {fold}--------------------------')
-            vae_tuner.finetune(train_dataloader,val_dataloader,test_dataloader,fold)
+            vae_tuner.finetune(train_dataloader,val_dataloader,test_dataloader,fold=1)
             #soft_aggregator(train_dataloader, None, test_dataloader,fold)
     elif baseline == 'Eval':
         model = AutoencoderKL.from_pretrained('./finetuned_vae/individually_trained_models',use_safetensors=True)

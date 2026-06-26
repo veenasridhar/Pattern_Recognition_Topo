@@ -8,12 +8,16 @@ from diffusers import AutoencoderKL
 import torch.nn as nn
 from torchvision.transforms import v2
 from torchinfo import summary
+
+from cldice_vis import visualize_cldice_comparison_grid
 #from attSets import AttSets
 from input_pipeline import *
 from tqdm import tqdm
 from torchmetrics import StructuralSimilarityIndexMeasure
 import matplotlib.pyplot as plt
 import torchvision.models as models
+
+from thesis_visualisation import visualize_comparison_with_overlay
 from visualizations import *
 from attSets import AttSets
 from cldice_loss import *
@@ -116,6 +120,8 @@ class VAEGANFineTuner:
             train_kl_loss = 0.0
             train_iou_dl = 0.0
             train_iou_img_prc = 0.0
+            train_cldice_dl =0.0
+            train_cldice_img_prc = 0.0
 
             train_progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
             #print(f'The learning rate is {decoder_optimizer.param_groups[0]['lr']:.4f}')
@@ -224,14 +230,62 @@ class VAEGANFineTuner:
                     if epoch % 5 == 0:
                         if not os.path.exists(os.path.join(f'./output_images_{fold}/train/Epoch {epoch}')):
                             os.mkdir(os.path.join(f'./output_images_{fold}/train/Epoch {epoch}'))
+                        if not os.path.exists(os.path.join(f'./output_images_{fold}/train/Epoch {epoch}', 'Metrics')):
+                            os.mkdir(os.path.join(f'./output_images_{fold}/train/Epoch {epoch}','Metrics'))
+
                         for i in range(len(reconstructed)):
-                            iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap = visulaize_iou_metrics(images[i], epoch, batch, reconstructed[i], gt[i], avg_result[i], tolerance=0,
-                                              save_path=f'./output_images_{fold}/train/Epoch {epoch}')
-                            train_iou_dl += iou_dilated
-                            train_iou_img_prc += iou_dilated_image_processing
+
+                            plt.imsave(os.path.join(f'./output_images_{fold}/train/Epoch {epoch}', f'output_images_{epoch}_{batch}_{index}.png'),
+                                       torch.clamp(reconstructed[i],0,1).permute(1, 2, 0).detach().cpu().numpy())
+
+                            predicted_binary = extract_foreground_mask(
+                                reconstructed[i].permute(1, 2, 0).detach().cpu().numpy())
+                            # red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
+                            gt_binary = extract_foreground_mask(target[i].permute(1, 2, 0).detach().cpu().numpy())
+                            img_prc_binary = extract_foreground_mask(
+                                avg_result[i].permute(1, 2, 0).detach().cpu().numpy())
+
+                            predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+                            gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+                            img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+
+                            cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
+                            cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+                            cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+
+                            cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+                            cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+                            cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+
+
+                            group = {
+                                'inputs': images[i].detach().cpu().numpy(),
+                                'gt': target[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                'gt_foreground': gt_binary,
+                                'pred': reconstructed[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                'pred_foreground':predicted_binary,
+                                'baseline': avg_result[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                'baseline_foreground':img_prc_binary,
+                                'label': f'Batch {index}',
+                                # clDice already computed above — just pass them in
+                                'cld_pred': cl_dice_dl,
+                                'prec_pred': cl_prec,
+                                'rec_pred': cl_rec,
+                                'cld_base': cl_dice_img_prc,
+                                'prec_base': cl_prec_i,
+                                'rec_base': cl_rec_i,
+                            }
+                            visualize_cldice_comparison_grid([group], epoch=epoch, batch=index, fold=fold,save_path=f'./output_images_{fold}/train/Epoch {epoch}/Metrics')
+                            train_cldice_dl += cl_dice_dl
+                            train_cldice_img_prc += cl_dice_img_prc
                             index += 1
-                            visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
-                                         img_proc_dilated_overlap, f'./output_images_{fold}/train/Epoch {epoch}', index, False)
+                            # iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap = visulaize_iou_metrics(images[i], epoch, batch, reconstructed[i], gt[i], avg_result[i], tolerance=0,
+                            #                   save_path=f'./output_images_{fold}/train/Epoch {epoch}')
+                            # train_iou_dl += iou_dilated
+                            # train_iou_img_prc += iou_dilated_image_processing
+                            # index += 1
+                            # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
+                            #              img_proc_dilated_overlap, f'./output_images_{fold}/train/Epoch {epoch}', index, False)
 
 
                     # Printing the step loss values in the progress bar
@@ -315,6 +369,8 @@ class VAEGANFineTuner:
             val_kl_loss = 0.0
             val_iou_dl = 0.0
             val_iou_img_prc = 0.0
+            val_cldice_dl =0.0
+            val_cldice_img_prc =0.0
 
             val_progress_bar = tqdm(val_loader,desc=f'Epoch {epoch}/{epochs}')
             if val_loader:
@@ -408,15 +464,63 @@ class VAEGANFineTuner:
                             if epoch % 5 ==0:
                                 if not os.path.exists(os.path.join(f'./output_images_{fold}/val/Epoch {epoch}')):
                                     os.mkdir(os.path.join(f'./output_images_{fold}/val/Epoch {epoch}'))
+                                if not os.path.exists(os.path.join(f'./output_images_{fold}/val/Epoch {epoch}','Metrics')):
+                                    os.mkdir(os.path.join(f'./output_images_{fold}/val/Epoch {epoch}','Metrics'))
                                 for i in range(len(reconstructed)):
-                                    iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap = visulaize_iou_metrics(
-                                        images[i], epoch, batch, reconstructed[i], target[i], avg_result[i], tolerance=0,
-                                        save_path=f'./output_images_{fold}/val/Epoch {epoch}')
-                                    visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i],
-                                                     avg_result[i], iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap, f'./output_images_{fold}/val/Epoch {epoch}', index, True)
-                                    val_iou_dl += iou_dilated
-                                    val_iou_img_prc += iou_dilated_image_processing
-                                    index +=1
+                                    plt.imsave(os.path.join(f'./output_images_{fold}/val/Epoch {epoch}',f'output_images_{epoch}_{batch}_{index}.png'),
+                                               torch.clamp(reconstructed[i],0,1).permute(1, 2, 0).detach().cpu().numpy())
+
+                                    predicted_binary = extract_foreground_mask(
+                                        reconstructed[i].permute(1, 2, 0).detach().cpu().numpy())
+                                    # red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
+                                    gt_binary = extract_foreground_mask(
+                                        target[i].permute(1, 2, 0).detach().cpu().numpy())
+                                    img_prc_binary = extract_foreground_mask(
+                                        avg_result[i].permute(1, 2, 0).detach().cpu().numpy())
+
+                                    predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+                                    gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+                                    img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+
+                                    cl_prec = np.sum(predicted_skeleton * gt_binary) / (
+                                                np.sum(predicted_skeleton) + 1e-7)
+                                    cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                    cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+
+                                    cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+                                    cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                    cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+
+                                    group = {
+                                        'inputs': images[i].detach().cpu().numpy(),
+                                        'gt': target[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'gt_foreground': gt_binary,
+                                        'pred': reconstructed[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'pred_foreground': predicted_binary,
+                                        'baseline': avg_result[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'baseline_foreground': img_prc_binary,
+                                        'label': f'Batch {index}',
+                                        # clDice already computed above — just pass them in
+                                        'cld_pred': cl_dice_dl,
+                                        'prec_pred': cl_prec,
+                                        'rec_pred': cl_rec,
+                                        'cld_base': cl_dice_img_prc,
+                                        'prec_base': cl_prec_i,
+                                        'rec_base': cl_rec_i,
+                                    }
+                                    visualize_cldice_comparison_grid([group], epoch=epoch, batch=index, fold=fold,
+                                                                     save_path=f'./output_images_{fold}/val/Epoch {epoch}/Metrics')
+                                    val_cldice_dl += cl_dice_dl
+                                    val_cldice_img_prc += cl_dice_img_prc
+                                    index += 1
+                                    # iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap = visulaize_iou_metrics(
+                                    #     images[i], epoch, batch, reconstructed[i], target[i], avg_result[i], tolerance=0,
+                                    #     save_path=f'./output_images_{fold}/val/Epoch {epoch}')
+                                    # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i],
+                                    #                  avg_result[i], iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap, f'./output_images_{fold}/val/Epoch {epoch}', index, True)
+                                    # val_iou_dl += iou_dilated
+                                    # val_iou_img_prc += iou_dilated_image_processing
+                                    #index +=1
 
                             # Printing the step loss values in the progress bar
                             val_progress_bar.set_postfix({
@@ -472,6 +576,8 @@ class VAEGANFineTuner:
             test_sharpness_loss =0.0
             test_iou_dl =0.0
             test_iou_img_prc = 0.0
+            test_cldice_dl =0.0
+            test_cldice_img_prc = 0.0
             test_progress_bar = tqdm(test_loader, desc=f"Epoch {epoch}/{epochs}")
             if test_loader:
                 print('The length of test loader',len(test_loader))
@@ -480,7 +586,7 @@ class VAEGANFineTuner:
                 with torch.no_grad():
                     if self.multi_image_mode:
                         for batch, input in enumerate(test_progress_bar):
-                            images, labels, avg_image = input
+                            images, labels, avg_result = input
                             target = labels
                             target = target.to(self.device)
 
@@ -566,17 +672,65 @@ class VAEGANFineTuner:
                             if epoch % 5 == 0:
                                 if not os.path.exists(f'./output_images_{fold}/test/Epoch {epoch}'):
                                     os.mkdir(f'./output_images_{fold}/test/Epoch {epoch}')
-                                print('len',len(reconstructed))
-                                print('images',images.shape)
-                                for i in range(len(images)):
-                                    iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap = visulaize_iou_metrics(
-                                        images[i], epoch, batch, reconstructed[i], target[i], avg_image[i], tolerance=0,
-                                        save_path=f'./output_images_{fold}/test/Epoch {epoch}')
-                                    visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i],
-                                                     avg_image[i], iou_dilated, iou_dilated_image_processing, dilated_overlap,img_proc_dilated_overlap, f'./output_images_{fold}/test/Epoch {epoch}', index, True)
-                                    test_iou_dl += iou_dilated
-                                    test_iou_img_prc += iou_dilated_image_processing
-                                    index +=1
+                                if not os.path.exists(os.path.join(f'./output_images_{fold}/test/Epoch {epoch}','Metrics')):
+                                    os.mkdir(os.path.join(f'./output_images_{fold}/test/Epoch {epoch}','Metrics'))
+
+                                for i in range(len(reconstructed)):
+                                    plt.imsave(os.path.join(f'./output_images_{fold}/test/Epoch {epoch}',
+                                                            f'output_images_{epoch}_{batch}_{index}.png'),
+                                               torch.clamp(reconstructed[i],0,1).permute(1, 2, 0).detach().cpu().numpy())
+
+                                    predicted_binary = extract_foreground_mask(
+                                        reconstructed[i].permute(1, 2, 0).detach().cpu().numpy())
+                                    # red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
+                                    gt_binary = extract_foreground_mask(
+                                        target[i].permute(1, 2, 0).detach().cpu().numpy())
+                                    img_prc_binary = extract_foreground_mask(
+                                        avg_result[i].permute(1, 2, 0).detach().cpu().numpy())
+
+                                    predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+                                    gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+                                    img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+
+                                    cl_prec = np.sum(predicted_skeleton * gt_binary) / (
+                                            np.sum(predicted_skeleton) + 1e-7)
+                                    cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                    cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+
+                                    cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+                                    cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                    cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+
+                                    group = {
+                                        'inputs': images[i].detach().cpu().numpy(),
+                                        'gt': target[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'gt_foreground': gt_binary,
+                                        'pred': reconstructed[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'pred_foreground': predicted_binary,
+                                        'baseline': avg_result[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'baseline_foreground': img_prc_binary,
+                                        'label': f'Batch {index}',
+                                        # clDice already computed above — just pass them in
+                                        'cld_pred': cl_dice_dl,
+                                        'prec_pred': cl_prec,
+                                        'rec_pred': cl_rec,
+                                        'cld_base': cl_dice_img_prc,
+                                        'prec_base': cl_prec_i,
+                                        'rec_base': cl_rec_i,
+                                    }
+                                    visualize_cldice_comparison_grid([group], epoch=epoch, batch=index, fold=fold,
+                                                                     save_path=f'./output_images_{fold}/test/Epoch {epoch}/Metrics')
+                                    test_cldice_dl += cl_dice_dl
+                                    test_cldice_img_prc += cl_dice_img_prc
+                                    index += 1
+                                    # iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap = visulaize_iou_metrics(
+                                    #     images[i], epoch, batch, reconstructed[i], target[i], avg_result[i], tolerance=0,
+                                    #     save_path=f'./output_images_{fold}/test/Epoch {epoch}')
+                                    # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i],
+                                    #                  avg_result[i], iou_dilated, iou_dilated_image_processing, dilated_overlap,img_proc_dilated_overlap, f'./output_images_{fold}/test/Epoch {epoch}', index, True)
+                                    # test_iou_dl += iou_dilated
+                                    # test_iou_img_prc += iou_dilated_image_processing
+                                    # index +=1
 
                             test_progress_bar.set_postfix({
                                 'Test Total loss': t_loss.item(),
@@ -650,13 +804,13 @@ class VAEGANFineTuner:
             print('Logging values to W&B...')
             run.log({'fold':fold,'epoch':epoch,
                      'Train_Total_Loss': train_vae_loss / len(train_loader), 'Test_Total_Loss': test_vae_loss / len(test_loader), 'Val Total Loss': val_vae_loss/len(val_loader),
-                    'Train IoU Img_prc': train_iou_img_prc/len(train_loader.dataset), 'Train IoU DL': train_iou_dl/len(train_loader.dataset),
-                     'Val IoU Img_prc': val_iou_img_prc/len(val_loader.dataset), 'Val IoU DL': val_iou_dl/len(val_loader.dataset),
-                     'Test IoU Img_prc': test_iou_img_prc/len(test_loader.dataset), 'Test IoU DL': test_iou_dl/len(test_loader.dataset),
+                    'Train cldice Img_prc': train_cldice_img_prc/len(train_loader.dataset), 'Train cldice DL': train_cldice_dl/len(train_loader.dataset),
+                     'Val cldice Img_prc': val_cldice_img_prc/len(val_loader.dataset), 'Val cldice DL': val_cldice_dl /len(val_loader.dataset),
+                     'Test cldice Img_prc': test_cldice_img_prc/len(test_loader.dataset), 'Test cldice DL': test_cldice_dl/len(test_loader.dataset),
                     # 'Learning Rate':decoder_optimizer.param_groups[0]['lr'],
                     #'Train_MSE_Loss': train_mse_loss / len(train_loader), 'Test_MSE_Loss': test_mse_loss / len(test_loader),'Val MSE Loss': val_mse_loss/len(val_loader),
                      #'Train_SSIM_Loss': train_ssim_loss / len(train_loader), 'Test_SSIM_Loss': test_ssim_loss / len(test_loader), 'Val SSIM Loss':val_ssim_loss/len(val_loader),
-                     'Train_KL_Loss': train_kl_loss / len(train_loader), 'Test_KL_Loss': test_kl_loss / len(test_loader),'Val KL Loss':val_kl_loss/len(val_loader),
+                     #'Train_KL_Loss': train_kl_loss / len(train_loader), 'Test_KL_Loss': test_kl_loss / len(test_loader),'Val KL Loss':val_kl_loss/len(val_loader),
                    })
 
         wandb.finish()
