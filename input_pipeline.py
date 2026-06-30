@@ -93,6 +93,9 @@ def grouped_split(group_of_item, fold, ratios=(0.7, 0.2, 0.1), seed_base=0):
 def permute_views(x):
     return x.index_select(-3, torch.randperm(x.shape[-3]))
 
+def shift_pixels(images,dy,dx):
+    pass
+
 class TopoDatasetImg(Dataset):
     def __init__(self, subbatch_dirs, idx, ground_truth_dir, img_proc_dir ,augment):
 
@@ -106,8 +109,6 @@ class TopoDatasetImg(Dataset):
             v2.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.float32}, scale=True),  # Scale = true already scales the images between 0,1.
             v2.RandomHorizontalFlip(p=0.5),
             v2.Lambda(permute_views, tv_tensors.Image),
-            #v2.Resize((256, 256)),
-            #v2.Grayscale(num_output_channels=3),                    # Only for VAE approach
             v2.ToTensor(),
         ])
         self.test_transformations = v2.Compose([
@@ -211,16 +212,8 @@ class TopoDataset(Dataset):
 
         labels = self.train_transformations(labels)
         avg_output = self.train_transformations(avg_output)
-        print('Labels unique', labels.unique())
-        print('Avg Output', avg_output.unique())
-        print(f'sub {sub} input shape', images[0].shape)
-        print(f'sub {sub} Label shape', labels.shape)
-        print(f'sub {sub} Avg Output shape',avg_output.shape)
-        #labels = self.convert_labels(labels)
-        #avg_output = self.convert_labels(avg_output)
-        # print('Labels unique',labels.unique())
-        # print('Avg Output',avg_output.unique() )
-        #sdf = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing', f'sdf_{sub}.npy'))).float()
+        # print('Labels unique', labels.unique())
+        # print('Avg Output', avg_output.unique())
         return images, labels, avg_output
 
 class ImageDataset(Dataset):
@@ -277,8 +270,24 @@ def input_pipeline_vae(data_directory, ground_truth_dir, image_processing_dir, f
     return train_dataset,val_dataset,test_dataset
 
 
+class OpenTODataset(Dataset):
+    def __init__(self, hf_dataset, transform=None):
+        self.ds = hf_dataset
+        self.transform = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Grayscale(num_output_channels=3),
+            v2.ToTensor(),
+        ])
+    def __len__(self):
+        return len(self.ds)
 
-
+    def __getitem__(self, idx):
+        img = self.ds[idx]["topology"]
+        if img.mode != "L":     #Checks if the images are grayscale
+            img = img.convert("L")
+        image_tensor = self.transform(img)
+        print('The typeof image', type(image_tensor))
+        return image_tensor, image_tensor
 
 
 

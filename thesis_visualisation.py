@@ -22,7 +22,8 @@ import os
 
 def make_tpfnfp_overlay(pred_mask, gt_mask, structure_val=2):
     H, W   = pred_mask.shape
-    canvas = np.zeros((H, W, 3), dtype=np.float32)
+    print(np.unique(gt_mask))
+    canvas = np.stack([gt_mask, gt_mask, gt_mask], axis=-1).astype(np.float32) / 2.0
     pred_bin = (pred_mask == structure_val).astype(np.float32)
     gt_bin   = (gt_mask   == structure_val).astype(np.float32)
     canvas[(pred_bin == 1) & (gt_bin == 1)] = [0.18, 0.80, 0.44]
@@ -61,7 +62,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
     # prevents tiny rows for wide images
 
     n_rows = 5
-    n_cols = 4
+    n_cols = 3
 
     fig_height = n_groups * (n_rows * row_height + 0.8)
     fig_width = n_cols * col_width
@@ -114,7 +115,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
                 ax.set_title("Input Images", fontsize=8, fontweight='bold', pad=4)
 
         # ── Col 1: GT spans rows 0-1, hidden rows 2-3 ──
-        ax_gt = fig.add_subplot(inner_gs[1, 1])
+        ax_gt = fig.add_subplot(inner_gs[1:3, 1])
         ax_gt.imshow(gt_rgb)
         ax_gt.set_xticks([]); ax_gt.set_yticks([])
         for spine in ax_gt.spines.values():
@@ -127,7 +128,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
             ax.axis('off')
 
         # ── Col 2: pred rows 0-1 | overlay rows 2-3 with metrics as xlabel ──
-        ax_pred = fig.add_subplot(inner_gs[1, 2])
+        ax_pred = fig.add_subplot(inner_gs[0:2, 2])
         ax_pred.imshow(pred_rgb)
         ax_pred.set_xticks([]); ax_pred.set_yticks([])
         for spine in ax_pred.spines.values():
@@ -135,22 +136,22 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         if g_idx == 0:
             ax_pred.set_title("Model Prediction", fontsize=8, fontweight='bold', pad=4)
 
-        ax_pred_ov = fig.add_subplot(inner_gs[2, 2])
-        ax_pred_ov.imshow(pred_overlay)
-        ax_pred_ov.set_xticks([]); ax_pred_ov.set_yticks([])
-        for spine in ax_pred_ov.spines.values():
-            spine.set_visible(False)
-        if g_idx == 0:
-            ax_pred_ov.set_title("Model Overlay", fontsize=7.5,
-                                  fontstyle='italic', pad=3)
+        # ax_pred_ov = fig.add_subplot(inner_gs[2, 2])
+        # ax_pred_ov.imshow(pred_overlay)
+        # ax_pred_ov.set_xticks([]); ax_pred_ov.set_yticks([])
+        # for spine in ax_pred_ov.spines.values():
+        #     spine.set_visible(False)
+        # if g_idx == 0:
+        #     ax_pred_ov.set_title("Model Overlay", fontsize=7.5,
+        #                           fontstyle='italic', pad=3)
         # metrics as xlabel directly under overlay
-        ax_pred_ov.set_xlabel(
+        ax_pred.set_xlabel(
             f"clDice: {cld_pred:.3f}  |  clP: {prec_pred:.3f}  |  clR: {rec_pred:.3f}",
-            fontsize=10, color='#111111', labelpad=3
+            fontsize=10, fontweight='bold',color='#111111', labelpad=3
         )
 
         # ── Col 3: baseline rows 0-1 | overlay rows 2-3 with metrics as xlabel ──
-        ax_base = fig.add_subplot(inner_gs[1, 3])
+        ax_base = fig.add_subplot(inner_gs[2:4, 2])
         ax_base.imshow(base_rgb)
         ax_base.set_xticks([]); ax_base.set_yticks([])
         for spine in ax_base.spines.values():
@@ -158,45 +159,45 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         if g_idx == 0:
             ax_base.set_title("Baseline", fontsize=8, fontweight='bold', pad=4)
 
-        ax_base_ov = fig.add_subplot(inner_gs[2, 3])
-        ax_base_ov.imshow(base_overlay)
-        ax_base_ov.set_xticks([]); ax_base_ov.set_yticks([])
-        for spine in ax_base_ov.spines.values():
-            spine.set_visible(False)
-        if g_idx == 0:
-            ax_base_ov.set_title("Baseline Overlay", fontsize=7.5,
-                                  fontstyle='italic', pad=3)
-        ax_base_ov.set_xlabel(
+        # ax_base_ov = fig.add_subplot(inner_gs[2, 3])
+        # ax_base_ov.imshow(base_overlay)
+        # ax_base_ov.set_xticks([]); ax_base_ov.set_yticks([])
+        # for spine in ax_base_ov.spines.values():
+        #     spine.set_visible(False)
+        # if g_idx == 0:
+        #     ax_base_ov.set_title("Baseline Overlay", fontsize=7.5,
+        #                           fontstyle='italic', pad=3)
+        ax_base.set_xlabel(
             f"clDice: {cld_base:.3f}  |  clP: {prec_base:.3f}  |  clR: {rec_base:.3f}",
-            fontsize=10, color='#111111', labelpad=3
+            fontsize=10, fontweight='bold', color='#111111', labelpad=3
         )
 
     # ── Shared legend ──
-    patches = [
-        mpatches.Patch(color='#39ff14', label='TP — correctly predicted'),
-        mpatches.Patch(color='#ff1744', label='FN — missed structure'),
-        mpatches.Patch(color='#1e90ff', label='FP — extra / misaligned structure'),
-    ]
-    legend = fig.legend(
-        handles=patches, loc='lower center', ncol=3,
-        fontsize=8, frameon=True,
-        bbox_to_anchor=(0.5, 0.0),
-    )
+    # patches = [
+    #     mpatches.Patch(color='#39ff14', label='TP — correctly predicted'),
+    #     mpatches.Patch(color='#ff1744', label='FN — missed structure'),
+    #     mpatches.Patch(color='#1e90ff', label='FP — extra / misaligned structure'),
+    # ]
+    # legend = fig.legend(
+    #     handles=patches, loc='lower center', ncol=3,
+    #     fontsize=12, frameon=True,
+    #     bbox_to_anchor=(0.5, 0.0),
+    # )
+    #
+    # fig.canvas.draw()  # force render so legend has size
+    # legend_height = legend.get_window_extent().height  # pixels
+    # fig_height_px = fig.get_size_inches()[1] * fig.dpi  # pixels
+    # bottom_frac = (legend_height + 10) / fig_height_px  # +10px breathing room
 
-    fig.canvas.draw()  # force render so legend has size
-    legend_height = legend.get_window_extent().height  # pixels
-    fig_height_px = fig.get_size_inches()[1] * fig.dpi  # pixels
-    bottom_frac = (legend_height + 10) / fig_height_px  # +10px breathing room
-
-    plt.subplots_adjust(
-        left=0.03,
-        right=0.99,
-        top=0.97,
-        bottom=bottom_frac  # ← dynamically computed, never overlaps
-    )
+    # plt.subplots_adjust(
+    #     left=0.03,
+    #     right=0.99,
+    #     top=0.97,
+    #     bottom=bottom_frac  # ← dynamically computed, never overlaps
+    # )
 
     fig.suptitle(
-        "Model Prediction vs Pixel-Avg Baseline",
+        "Model Prediction vs Pixel Averaging Baseline",
         fontsize=10, fontweight='bold', y=1.002
     )
 
@@ -208,6 +209,95 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         plt.savefig(out, dpi=150, bbox_inches='tight', facecolor='white')
         print(f"Saved → {out}")
     plt.close()
+
+
+def _remove_spines(ax):
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+def plot2_overlay(
+        gt,  # (H,W) uint8
+        pred,  # (H,W) uint8
+        baseline,  # (H,W) uint8
+        metrics_pred=None,
+        metrics_base=None,
+        title="Overlay: Prediction vs Pixel-Avg",
+        save_path=None,
+        dpi=150, batch = 0
+):
+
+    cld_p, clp_p, clr_p = metrics_pred
+    cld_b, clp_b, clr_b = metrics_base
+
+    ov_pred = make_tpfnfp_overlay(pred, gt)
+    ov_base = make_tpfnfp_overlay(baseline, gt)
+
+    H, W = gt.shape
+    aspect = W / H
+    cell_h = 4.0
+    cell_w = cell_h * aspect
+    n_cols = 3
+
+    fig_w = cell_w * n_cols + 0.6
+    fig_h = cell_h + 1.2  # 1 row + title + legend
+
+    fig, axes = plt.subplots(
+        1, 3,
+        figsize=(fig_w, fig_h),
+        facecolor='white',
+        gridspec_kw={'wspace': 0.06}
+    )
+
+    # ── Col 0: GT ──
+    axes[0].imshow(gt, cmap='gray', vmin=0, vmax=2, aspect='auto')
+    axes[0].set_title("Ground Truth", fontsize=14, fontweight='bold', pad=5)
+    _remove_spines(axes[0])
+
+    # ── Col 1: Prediction overlay ──
+    axes[1].imshow(ov_pred, aspect='auto')
+    axes[1].set_title("Model Prediction", fontsize=14, fontweight='bold', pad=5)
+    axes[1].set_xlabel(
+        f"clDice: {cld_p:.3f}  |  clP: {clp_p:.3f}  |  clR: {clr_p:.3f}",
+        fontsize=14,fontweight='bold', color='#222222', labelpad=6
+    )
+    _remove_spines(axes[1])
+
+    # ── Col 2: Baseline overlay ──
+    axes[2].imshow(ov_base, aspect='auto')
+    axes[2].set_title("Pixel-Avg Baseline", fontsize=14, fontweight='bold', pad=5)
+    axes[2].set_xlabel(
+        f"clDice: {cld_b:.3f}  |  clP: {clp_b:.3f}  |  clR: {clr_b:.3f}",
+        fontsize=14,fontweight='bold', color='#222222', labelpad=6
+    )
+    _remove_spines(axes[2])
+
+    # ── Legend ──
+    patches = [
+        mpatches.Patch(color='#00ff00', label='TP — correctly predicted'),
+        mpatches.Patch(color='#ff0000', label='FN — missed structure'),
+        mpatches.Patch(color='#0066ff', label='FP — extra / misaligned structure'),
+    ]
+    fig.legend(
+        handles=patches,
+        loc='lower center',
+        ncol=3,
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        bbox_to_anchor=(0.5, 0.0),
+    )
+
+    fig.suptitle(title, fontsize=11, fontweight='bold', y=1.01)
+    plt.subplots_adjust(bottom=0.13)
+
+    if save_path:
+        fig.savefig(save_path+f'overlay_{batch}.png', dpi=dpi, bbox_inches='tight', facecolor='white')
+        print(f"[Plot 2] Saved → {save_path}")
+
+    return fig
 
 # # ── Metric helpers ─────────────────────────────────────────────────────────────
 #

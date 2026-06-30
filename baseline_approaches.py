@@ -4,7 +4,6 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from metrics import *
-from siamese_network import *
 
 def image_averaging(raw_images, threshold, normalised=False):
 

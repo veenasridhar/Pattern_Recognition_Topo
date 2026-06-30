@@ -152,9 +152,10 @@ class VAEGANFineTuner:
 
                     with torch.no_grad():                                               # Encoder is not trained during the multi iamge mode
                         posterior = self.vae.encode(combinedimages).latent_dist        # Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
-                        #target_posterior = self.vae.encode(target).latent_dist
+                        target_posterior = self.vae.encode(target).latent_dist
                         individual_mu = posterior.mean       # Individual mu is mean represented using 4 latent variables (10,4,32,32)
                         log_var = posterior.logvar          # Log variance represent the uncertainty or spread of the distribution. (log for stability)
+                        target_mu = target_posterior.mean
 
                     # Reshape it to (B,N,latent_dimension,H,W)
                     mu = individual_mu.reshape(batch_size, num_imgs, *individual_mu.shape[1:])  # (B,N,latent_dimension,H,W) = (2,5,4,32,32)
@@ -202,6 +203,7 @@ class VAEGANFineTuner:
                     #reconstruction_loss = ce_loss(reconstructed,target)
                     #recosntrcution_loss = mse_loss(reconstructed, target)
                     reconstruction_loss = perceptual_loss(target,reconstructed)
+                    #latent_space_exploration(individual_mu, averaged_mu, target_mu, self.vae)
 
                     # if latent_technique == 'product_of_gaussians':
                     #     kl_loss = -0.5 *(1+combined_log_variance - combined_mu.pow(2)- combined_log_variance.exp()).mean()  # KL Divergence is calculated using closed form equation insetead of posterior.kl().mean() which might work for individual image decoding
@@ -346,7 +348,7 @@ class VAEGANFineTuner:
                     train_kl_loss += kl_loss.item()
                     #reconstructed = torch.argmax(reconstructed, dim=1)
 
-                    if epoch%5 == 0 :
+                    if epoch%50 == 0 :
                         visulaize_images_individual(batch,epoch, reconstructed, images, None,f'./Individual Reconstruction Results/individual_images_Fold {fold}/train',False)
                         #latent_space_exploration(individual_mu, None, None, self.vae)
                         #visualize_feature_maps(images, individual_mu, False)
@@ -548,7 +550,7 @@ class VAEGANFineTuner:
                             val_loss = recon_loss + kl_weight * kl_loss
 
                             #reconstructed = torch.argmax(reconstructed,dim=1)
-                            if epoch % 5 == 0:
+                            if epoch % 50 == 0:
                                 visulaize_images_individual( batch, epoch, reconstructed, images, None,
                                                  f'./Individual Reconstruction Results/individual_images_Fold {fold}/val',
                                                  False)
@@ -772,7 +774,7 @@ class VAEGANFineTuner:
 
                             #reconstructed = torch.argmax(reconstructed, dim=1)
 
-                            if epoch%5 == 0:
+                            if epoch%50 == 0:
                                 visulaize_images_individual(batch,epoch, reconstructed, images,None,f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/', True)
 
                                 # Printing the step loss values in the progress bar
@@ -804,9 +806,9 @@ class VAEGANFineTuner:
             print('Logging values to W&B...')
             run.log({'fold':fold,'epoch':epoch,
                      'Train_Total_Loss': train_vae_loss / len(train_loader), 'Test_Total_Loss': test_vae_loss / len(test_loader), 'Val Total Loss': val_vae_loss/len(val_loader),
-                    'Train cldice Img_prc': train_cldice_img_prc/len(train_loader.dataset), 'Train cldice DL': train_cldice_dl/len(train_loader.dataset),
-                     'Val cldice Img_prc': val_cldice_img_prc/len(val_loader.dataset), 'Val cldice DL': val_cldice_dl /len(val_loader.dataset),
-                     'Test cldice Img_prc': test_cldice_img_prc/len(test_loader.dataset), 'Test cldice DL': test_cldice_dl/len(test_loader.dataset),
+                    #'Train cldice Img_prc': train_cldice_img_prc/len(train_loader.dataset), 'Train cldice DL': train_cldice_dl/len(train_loader.dataset),
+                     #'Val cldice Img_prc': val_cldice_img_prc/len(val_loader.dataset), 'Val cldice DL': val_cldice_dl /len(val_loader.dataset),
+                     #'Test cldice Img_prc': test_cldice_img_prc/len(test_loader.dataset), 'Test cldice DL': test_cldice_dl/len(test_loader.dataset),
                     # 'Learning Rate':decoder_optimizer.param_groups[0]['lr'],
                     #'Train_MSE_Loss': train_mse_loss / len(train_loader), 'Test_MSE_Loss': test_mse_loss / len(test_loader),'Val MSE Loss': val_mse_loss/len(val_loader),
                      #'Train_SSIM_Loss': train_ssim_loss / len(train_loader), 'Test_SSIM_Loss': test_ssim_loss / len(test_loader), 'Val SSIM Loss':val_ssim_loss/len(val_loader),

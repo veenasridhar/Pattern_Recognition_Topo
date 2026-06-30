@@ -43,3 +43,5 @@ venv/
 /split_fold2.json
 /Residual Convolutional Network Results_original size_Fold 1/
 /output_images/
+/convolutional_network_chkpoint/
+/Residual Convolutional Network Results_original size_Fold 2/

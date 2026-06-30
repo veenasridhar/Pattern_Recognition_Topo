@@ -107,7 +107,7 @@ def visualize_cldice_comparison_grid(groups, epoch, batch, fold, save_path):
                 spine.set_visible(False)
 
             if r == 0 and g_idx == 0:
-                ax.set_title("Input Images (1-4)", fontsize=9, fontweight='bold', pad=4)
+                ax.set_title("Input Images (1-5)", fontsize=9, fontweight='bold', pad=4)
 
         # ── Col 1: Ground Truth (spans rows 0-1) ──
         ax_gt = fig.add_subplot(inner_gs[1, 1])

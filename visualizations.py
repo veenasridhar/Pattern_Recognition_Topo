@@ -585,8 +585,8 @@ def latent_space_exploration(individual_mu, averaged_mu,target_mu,model):
                 print('The xval and yval is ',x_val,y_val)
                 z_inversed = pca.inverse_transform([[x_val,y_val]])
                 z_inversed = torch.tensor(z_inversed,dtype=torch.float32,device= torch.device('cuda'))
-                #print('The shape of z_inversed',z_inversed.shape)
-                z_spatial = z_inversed.view(1,4,32,32)
+                print('The shape of z_inversed',z_inversed.shape)
+                z_spatial = z_inversed.view(1,*individual_mu.shape[1:])
                 print('The shape of z_inversed', z_spatial.shape)
                 with torch.no_grad():
                     reconstructed = model.decode(z_spatial).sample
@@ -594,7 +594,8 @@ def latent_space_exploration(individual_mu, averaged_mu,target_mu,model):
                 ax1[i,j].imshow(reconstructed[0].permute(1,2,0).detach().cpu().numpy())
                 ax1[i,j].axis('off')
         plt.tight_layout()
-        plt.show()
+        plt.savefig(f'latent_space_exploration{i}.png', dpi=150, bbox_inches='tight')
+        plt.close()
 
 
 def visualize_agg_feature_map(images, common_feature_map,reconstructed):

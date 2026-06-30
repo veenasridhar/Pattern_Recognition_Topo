@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torchvision.models as models
-import gudhi
+#import gudhi
 
 
 class VGGPerceptualLoss(nn.Module):
