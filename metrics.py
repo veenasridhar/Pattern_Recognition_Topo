@@ -79,7 +79,7 @@ class VGGPerceptualLoss(nn.Module):
         return similarity
 
 def extract_red_mask(image):
-    print(image.min(),image.max())
+    print('Image min and max',image.min(),image.max())
     R = image[:,:,0]
     G = image[:,:,1]
     mask = (R <0.2)

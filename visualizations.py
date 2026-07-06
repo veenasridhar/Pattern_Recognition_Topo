@@ -14,39 +14,17 @@ from image_processing_approach import *
 from metrics import iou_metrics
 from scipy.ndimage.morphology import binary_dilation
 
-def postprocess_result(reconstructed_image):
-
-    t = [(1.0, 0.0, 0.0),  # full red
-         (0.5, 0.5, 0.5),  # full grey
-         (1.0, 1.0, 1.0), ]  # full white
-    t = torch.tensor(t, dtype=torch.float)  # The shape of the tensor is (T,C)
-    # print(t.shape)
-    reconstructed = reconstructed_image.permute(0, 2, 3, 1).detach().cpu().unsqueeze(-2)  # This reshapes the tensor to be (B,H,W,1,C)
-    print(reconstructed.shape)
-
-    dist = ((reconstructed - t) ** 2).sum(dim=-1)  # This first subtracts (H,W,1,C) - (T,C) and the result is summed along dim(-1) thus resulting in (H,W,T)
-    min_dis_index = dist.argmin(-1)
-    print('The shape of min distances',min_dis_index.shape)
-    reconstructed = t[min_dis_index]
-    print('The shape of the reconstructed image',reconstructed.shape)
-    return reconstructed
-
 def extract_foreground_mask(image):
     channels = (image.shape)[-1]
-    print(channels)
     if channels == 1:
         grayscale_channel = image[:,:,0]
         mask = (grayscale_channel ==1)
-        print(mask.min(),mask.max())
     elif channels == 3:
         channel1 = image[:,:,0]
         channel2 = image[:,:,1]
         channel3 = image[:,:,2]
-        print(np.unique(channel1))
-        mask = (channel1 >= 0.6) & (channel2  >= 0.6) & (channel3 >= 0.6)
-        # R = image[:, :, 0]
-        # G = image[:, :, 1]
-        # mask = (R < 0.2)
+        print('The unique values of channel 1 ',np.unique(channel1))
+        mask = (channel1 >= 0.65) & (channel2  >= 0.65) & (channel3 >= 0.65)
     return mask.astype(float)
 
 
@@ -65,72 +43,48 @@ def cldice_metric(predicted_binary,gt_binary,img_prc_binary,):
     cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
     return cl_dice_dl, cl_dice_img_prc
 
-def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image_processing_result,tolerance=0,save_path='Simple_Conv_Grayscale_output'):
+def visulaize_iou_metrics(red_extracted_structures, red_gt_structures, red_image_processing_structures, tolerance=0,):
 
-    print(predicted_structures.shape)
-    print(image_processing_result.shape)
-    predicted_binary = extract_foreground_mask(predicted_structures.permute(1,2,0).detach().cpu().numpy())
-    #red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
-    gt_binary = extract_foreground_mask(gt.permute(1,2,0).detach().cpu().numpy())
-    img_prc_binary = extract_foreground_mask(image_processing_result.permute(1,2,0).detach().cpu().numpy())
+    if tolerance>0:
+        r = tolerance
+        y, x = np.ogrid[-r:r + 1, -r:r + 1]
+        circle = (x ** 2 + y ** 2 <= r ** 2)
+        predicted_dilated_structure = binary_dilation(red_extracted_structures.astype(bool), structure=circle)
+        target_dilated_structure = binary_dilation(red_gt_structures.astype(bool), structure=circle)
+        image_processing_structures = binary_dilation(red_image_processing_structures.astype(bool), structure=circle)
+    else:
+        predicted_dilated_structure = red_extracted_structures
+        target_dilated_structure = red_gt_structures
+        image_processing_structures = red_image_processing_structures
+    
+    TP = (predicted_dilated_structure * target_dilated_structure).sum()
+    FP = (predicted_dilated_structure * (1 - target_dilated_structure)).sum()
+    FN = ((1 - predicted_dilated_structure) * target_dilated_structure).sum()
+    
+    dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
+    dilated_overlap[..., 0] = (predicted_dilated_structure > 0) & (target_dilated_structure == 0)  # FP = red
+    dilated_overlap[..., 1] = (predicted_dilated_structure > 0) & (target_dilated_structure > 0)  # TP = green
+    dilated_overlap[..., 2] = (predicted_dilated_structure == 0) & (target_dilated_structure > 0)  # FN = blue
+    
+    iou_dilated = TP / (TP + FP + FN + 1e-8)
+    
+    
+    TP = (image_processing_structures * target_dilated_structure).sum()
+    FP = (image_processing_structures * (1 - target_dilated_structure)).sum()
+    FN = ((1 - image_processing_structures) * target_dilated_structure).sum()
 
-    predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
-    gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
-    img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+    img_proc_dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
+    img_proc_dilated_overlap[..., 0] = (image_processing_structures > 0) & (target_dilated_structure == 0)  # FP = red
+    img_proc_dilated_overlap[..., 1] = (image_processing_structures > 0) & (target_dilated_structure > 0)  # TP = green
+    img_proc_dilated_overlap[..., 2] = (image_processing_structures == 0) & (target_dilated_structure > 0)  # FN = blue
+    
+    iou_dilated_image_processing = TP / (TP + FP + FN + 1e-8)
 
-    cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
-    cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
-    cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
-
-    cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
-    cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
-    cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
-
-
-
-    return cl_dice_dl, cl_dice_img_prc,  cldice_overlay_img_prc
-
-
-    # if tolerance>0:
-    #     r = tolerance
-    #     y, x = np.ogrid[-r:r + 1, -r:r + 1]
-    #     circle = (x ** 2 + y ** 2 <= r ** 2)
-    #     predicted_dilated_structure = binary_dilation(red_extracted_structures.astype(bool), structure=circle)
-    #     target_dilated_structure = binary_dilation(red_gt_structures.astype(bool), structure=circle)
-    #     image_processing_structures = binary_dilation(red_image_processing_structures.astype(bool), structure=circle)
-    # else:
-    #     predicted_dilated_structure = red_extracted_structures
-    #     target_dilated_structure = red_gt_structures
-    #     image_processing_structures = red_image_processing_structures
-    #
-    # TP = (predicted_dilated_structure * target_dilated_structure).sum()
-    # FP = (predicted_dilated_structure * (1 - target_dilated_structure)).sum()
-    # FN = ((1 - predicted_dilated_structure) * target_dilated_structure).sum()
-    #
-    # dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
-    # dilated_overlap[..., 0] = (predicted_dilated_structure > 0) & (target_dilated_structure == 0)  # FP = red
-    # dilated_overlap[..., 1] = (predicted_dilated_structure > 0) & (target_dilated_structure > 0)  # TP = green
-    # dilated_overlap[..., 2] = (predicted_dilated_structure == 0) & (target_dilated_structure > 0)  # FN = blue
-    #
-    # iou_dilated = TP / (TP + FP + FN + 1e-8)
-    #
-    #
-    # TP = (image_processing_structures * target_dilated_structure).sum()
-    # FP = (image_processing_structures * (1 - target_dilated_structure)).sum()
-    # FN = ((1 - image_processing_structures) * target_dilated_structure).sum()
-
-    # img_proc_dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
-    # img_proc_dilated_overlap[..., 0] = (image_processing_structures > 0) & (target_dilated_structure == 0)  # FP = red
-    # img_proc_dilated_overlap[..., 1] = (image_processing_structures > 0) & (target_dilated_structure > 0)  # TP = green
-    # img_proc_dilated_overlap[..., 2] = (image_processing_structures == 0) & (target_dilated_structure > 0)  # FN = blue
-    #
-    # iou_dilated_image_processing = TP / (TP + FP + FN + 1e-8)
-
-    # print('Predicted IoU ', iou_dilated)
-    # print('Image Processing IoU ',iou_dilated_image_processing)
+    print('Predicted IoU ', iou_dilated)
+    print('Image Processing IoU ',iou_dilated_image_processing)
 
 
-#    return iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap
+    return iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap
 
 def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, original, gt_image, image_processing_result, iou_dilated,iou_dilated_image_processing,dilated_overlap,
                                          img_proc_dilated_overlap, save_path, index,test=False):
@@ -139,31 +93,7 @@ def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, origin
     original = torch.clamp(original, 0, 1)
 
     if multi_image_mode:
-        gt_image = torch.clamp(gt_image, 0, 1)
-        #reconstructed = postprocess_result(reconstructed_image)
 
-        #for i in range(len(reconstructed_image)):
-        if test:
-            #image_processing_result = cv2.imread(os.path.join('data/Final Data/Image Processing Results Grayscale','test',f'result_{index}.png'))
-            #plt.imsave(os.path.join(save_path, f'output_test_images_{epoch}_{batch}_{i}.png'),reconstructed_image.detach().cpu().numpy()*0.5,cmap='gray')
-            plt.imsave(os.path.join(save_path, f'output_test_images_{epoch}_{batch}_{index}.png'), reconstructed_image.permute(1, 2, 0).detach().cpu().numpy())
-            #plt.imsave(os.path.join(save_path, f'output_test_images_{index}.png'),reconstructed_image[i].permute(1, 2, 0).detach().cpu().numpy())
-            #index = index+1
-            #plt.imsave(os.path.join(save_path, f'output_test_images_{epoch}_{batch}_{i}.png'),reconstructed_image[i])
-            # individual_reconstruction = random_reconstruction[i].squeeze(0)
-            # individual_reconstruction= torch.clamp(individual_reconstruction, 0.0,1.0)
-            # plt.imsave(os.path.join(save_path, f'random_recon/random_reconstruction_{epoch}_{batch}_{i}.png'),individual_reconstruction.permute(1, 2, 0).detach().cpu().numpy())
-        else:
-            #image_processing_result = cv2.imread(os.path.join('data/Final Data/Image Processing Results Grayscale', 'train', f'result_{index}.png'))
-            #print('Image Processing Result',image_processing_result.shape)
-            #plt.imsave(os.path.join(save_path, f'output_images_{epoch}_{batch}_{i}.png'),
-            #           reconstructed_image[i].detach().cpu().numpy()*0.5,cmap='gray')
-            plt.imsave(os.path.join(save_path, f'output_images_{epoch}_{batch}_{index}.png'), reconstructed_image.permute(1, 2, 0).detach().cpu().numpy())
-            #plt.imsave(os.path.join(save_path, f'output_images_{index}.png'),reconstructed_image[i].permute(1, 2, 0).detach().cpu().numpy())
-            #index+=1
-            #plt.imsave(os.path.join(save_path, f'output_images_{epoch}_{batch}.png'), reconstructed_image)
-
-        #for i in range(len(original)):
         fig = plt.figure(figsize=(16, 8))
         grid_spec = fig.add_gridspec(2, 5, hspace=0.1, wspace=0.1)
 
@@ -221,7 +151,7 @@ def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, origin
             # ax_left.set_title('Image Processing Result')
 
             plt.tight_layout()
-            plt.savefig(os.path.join(save_path, f'reconstructed_images_{epoch}_{batch}_{index}.png'), dpi=150)
+            plt.savefig(os.path.join(save_path, f'iou_metric_{index}.png'), dpi=150)
             plt.close()
     else:
 

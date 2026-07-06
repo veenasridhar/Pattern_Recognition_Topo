@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.morphology import binary_dilation
 from skimage.morphology import skeletonize
 from scipy.ndimage import distance_transform_edt
-import gudhi
+#import gudhi
 from cldice_loss import *
 from metrics import compute_betti_numbers
 import collections
@@ -30,10 +30,13 @@ class simple_Conv(nn.Module):
         self.conv_layer2 = nn.Conv2d(16, 32, kernel_size=7, stride=1, padding=3)
         self.conv_layer3 = nn.Conv2d(32, 64, kernel_size=7, stride=1, padding=3)
         self.conv_layer4 = nn.Conv2d(64, 128, kernel_size=7, stride=1, padding=3)
-        self.conv_layer5 = nn.Conv2d(128, 64, kernel_size=5, stride=1, padding=2)
-        self.conv_layer6 = nn.Conv2d(64, 16, kernel_size=5, stride=1, padding=2)
+        self.conv_layer5 = nn.Conv2d(128, 256, kernel_size=7, stride=1, padding=3)
+        #self.conv_layer6 = nn.Conv2d(256, 128, kernel_size=5, stride=1, padding=2)
+        self.conv_layer7 = nn.Conv2d(256, 64, kernel_size=5, stride=1, padding=2)
+        self.conv_layer8 = nn.Conv2d(64, 16, kernel_size=5, stride=1, padding=2)
         self.output_layer = nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
 
+        self.dropout = nn.Dropout2d(p=0.2)
         self.relu_layer = nn.ReLU()
         self.sdf_head = nn.Sequential(
             nn.Conv2d(16, 1, kernel_size=1),
@@ -42,78 +45,21 @@ class simple_Conv(nn.Module):
 
     def forward(self, x, avg_output, alpha):
         x1 = self.relu_layer(self.conv_layer1(x))
-        x2 = self.relu_layer(self.conv_layer2(x1))
-        x3 = self.relu_layer(self.conv_layer3(x2))
-        x4 = self.relu_layer(self.conv_layer4(x3))
+        x2 = self.dropout(self.relu_layer(self.conv_layer2(x1)))
+        x3 = self.dropout(self.relu_layer(self.conv_layer3(x2)))
+        x4 = self.dropout(self.relu_layer(self.conv_layer4(x3)))
         x5 = self.relu_layer(self.conv_layer5(x4))
-        x6 = self.relu_layer(self.conv_layer6(x5))
-        conv_output = self.output_layer(x6)
+        #x6 = self.relu_layer(self.conv_layer6(x5))
+        x7 = self.relu_layer(self.conv_layer7(x5))
+        x8 = self.relu_layer(self.conv_layer8(x7))
+        conv_output = self.output_layer(x8)
         #output = conv_output
         output = alpha * conv_output + avg_output
 
         #sdf_output = self.sdf_head(x5)
         return output
 
-def sdf_distance_function(label_map,num_classes=3):
 
-    sdf = np.zeros((num_classes, *label_map.shape), dtype=np.float32)
-
-    #for class_id in [2]:
-    class_id =2
-    mask = (label_map == class_id)          # Mask with all white structures = True
-    #print('The mask shape', mask.shape, 'mask values', np.unique(mask,return_counts=True))
-
-    if not mask.any():
-        sdf= 0.0
-        #sdf[class_id] = 0.0
-        #continue
-
-    distance_inside = distance_transform_edt(mask)
-    #print('Distance Inside',distance_inside.max(),distance_inside.min())
-    distance_outside = distance_transform_edt(~mask)
-    #print('Distance Outside',distance_outside.max(),distance_outside.min())
-
-    sdf = distance_outside - distance_inside                #This is a Numpy Array
-    #sdf[class_id] = distance_outside - distance_inside
-    print('Label Map', label_map.shape)
-    # diagnol_length = np.hypot(*label_map.shape)
-    # sdf = sdf/ diagnol_length
-
-    normalized = np.zeros_like(sdf)
-    #
-    pos_mask = sdf > 0  # outside pixels
-    neg_mask = sdf < 0  # inside pixels
-    #
-    if pos_mask.any():
-        pos_max = sdf[pos_mask].max()
-        normalized[pos_mask] = sdf[pos_mask] / pos_max  # → [0, +1]
-
-    if neg_mask.any():
-        neg_min = abs(sdf[neg_mask].min())
-        normalized[neg_mask] = sdf[neg_mask] / neg_min  # → [-1, 0]
-
-    return sdf, normalized  # [-1, +1]
-def get_persistance_diagram(prob_map):
-
-    '''prob_map: numpy (H, W) - Softmax probabilities of the for class 2 (white strutures)'''
-
-    cc = gudhi.CubicalComplex(
-        dimensions=prob_map.shap,
-        top_dimensional_cells= prob_map.flatten()
-    )
-    cc.compute_persistance()
-
-    # Get birth-death pairs for dimension 0 (components) and 1 (holes)
-    dgm_0 = cc.persistence_intervals_in_dimension(0)  # components
-    dgm_1 = cc.persistence_intervals_in_dimension(1)  # holes
-
-    return dgm_0, dgm_1
-def topo_loss(pred_diagram, gt_diagram):
-    # Wasserstein distance — optimal transport between diagrams
-    # Penalizes unmatched births/deaths
-    return gudhi.wasserstein.wasserstein_distance(
-        pred_diagram, gt_diagram, order=2
-    )
 def build_dataset_items(data_directory):
     batches_list , items = [], []
     for dirpath, dirnames, filenames in os.walk(data_directory):
@@ -138,7 +84,7 @@ def train_grayscale():
 
     data_dir = 'data/Bigger Batches of Data_original_size'
     ground_truth_dir = 'data/Edited Ground Truth_ Encoded'
-    image_processing_dir = 'data/Final Data/Image Processing Original Size Grayscale'
+    image_processing_dir = 'data/Image Processing Original Size Grayscale'
     batches_list, items = build_dataset_items(data_dir)                   # batches_list is the list of batches as main batch indices [7,7,11,11,11,11,....]
                                                                          # items is the list of  full address of each batch
     print('Total Sub Batches ', len(items))
@@ -147,7 +93,7 @@ def train_grayscale():
 
     for fold in range(5):
 
-        train_idx, val_idx, test_idx = grouped_split(batches_list, fold=3, ratios=[0.7, 0.2, 0.1])
+        train_idx, val_idx, test_idx = grouped_split(batches_list, fold=fold, ratios=[0.7, 0.2, 0.1])
 
         print('Train Index', train_idx)
         print('Test Index', test_idx)
@@ -161,22 +107,24 @@ def train_grayscale():
         val_dataset = TopoDatasetImg(items,val_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir, augment=False)
         test_dataset = TopoDatasetImg(items,test_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir,augment=False)
 
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,num_workers=4,pin_memory=True)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,num_workers=4,pin_memory=True)
 
         lr = 0.001
-        epochs = 500
+        epochs = 300
 
-        optimizer1 = torch.optim.AdamW(model.parameters(), lr=lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=500)
+        optimizer1 = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay = 1e-3)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=300)
         #scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer1,gamma= 0.95)
 
         weights = torch.tensor([0.25, 0.35, 0.5])
         crossentropy_loss = torch.nn.CrossEntropyLoss(weight=weights).to(device)
         cl_dice = soft_dice_cldice()
-        save_parent_dir = 'Residual Convolutional Network Results_original size'
+
+        save_parent_dir = f'Residual Convolutional Network Results_original size_{fold}'
         best_loss = float('inf')
+
         run = wandb.init(
             # Set the wandb entity where your project will be logged (generally your team name).
             entity="veenasridhar96-university-of-stuttgart",
@@ -193,21 +141,25 @@ def train_grayscale():
         #wandb.define_metric("*", step_metric="epoch")
 
         for epoch in range(epochs):
+            
             model.train()
             print('Epoch: ',epoch, ' learning rate: ', lr)
+            
             train_loss = 0.0
             train_cross_entropy_loss = 0.0
             train_dice_loss =0.0
+            train_img_proc_dice_loss = 0.0
             train_batch = 0
             train_iou_dl = 0.0
             train_iou_img_prc = 0.0
-            train_sdf_mse_image_prc = 0.0
-            train_sdf_mse_dl = 0.0
-            train_img_proc_dice_loss = 0.0
+            train_cl_dice_image_prc = 0.0
+            train_cl_dice_dl = 0.0    
+            
             if epoch < 150:             # For weighing ce_loss and sdf loss --- 150,250
-                alpha = epoch / 250
+                alpha = epoch / 150
             else:
                 alpha =  1
+
             #alpha = epoch/epochs
             accum_steps = 4
             optimizer1.zero_grad()
@@ -218,14 +170,14 @@ def train_grayscale():
                 labels = labels.to(device)
                 avg_output = avg_output.to(device)
                 avg_output_classes = avg_output.squeeze(1)
-                #print('Avg shape',avg_output.shape,'Avg Labels', avg_output.unique())
-                #gt_sdf = sdf.to(device)
                 labels = labels.squeeze(1)
+                #print('Avg shape',avg_output.shape,'Labels', labels.shape)
+                
                 avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
                 output_logits  = model(images,avg_output_one_hot,alpha)
                 #output_logits = output_logits.unsqueeze(0)
-                print('Output logits shape',output_logits.shape)
+
                 output_softmax = torch.softmax(output_logits, dim=1)
                 output = torch.argmax(output_logits,dim=1)                          # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
                 targets_onehot = F.one_hot(labels, num_classes=3) # (B, H, W, C)
@@ -237,9 +189,7 @@ def train_grayscale():
                 #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
                 dice_loss = cl_dice(targets_onehot,output_softmax,train_batch)
                 img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),train_batch)
-                # visualise_softmax_prob(output_softmax)
-                # boundary_loss = sdf_loss(output_softmax,gt_sdf_white)
-                #loss = (1-alpha) * cross_entropy_loss_m1 + alpha * boundary_loss
+                
                 loss = cross_entropy_loss +dice_loss
                 train_img_proc_dice_loss += img_processing_dice_loss.item()
                 train_dice_loss += dice_loss.item()
@@ -263,13 +213,14 @@ def train_grayscale():
                         os.mkdir(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'IoU Metric'))
                     if not os.path.exists(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map')):
                         os.mkdir(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map'))
-                    print(output.shape)
+                    
                     for i in range(len(output)):
                         #print('Unique Outputs',output.unique(return_counts=True), 'Unique Labels',labels.unique(return_counts=True))
                         # plt.imsave(f'{save_parent_dir}/train/Epoch {epoch}/label_{train_batch}.png', labels[i].cpu().detach().numpy(),cmap='gray',vmin=0,vmax=2)
                         # plt.close()
                         plt.imsave(f'{save_parent_dir}/train/Epoch {epoch}/result_{train_batch}.png',output[i].detach().cpu().numpy(),cmap='gray',vmin=0,vmax=2)
                         plt.close()
+                        
                         predicted_binary = (output[i].detach().cpu().numpy() == 2).astype(np.float32)
                         gt_binary = (labels[i].detach().cpu().numpy() == 2).astype(np.float32)
                         img_prc_binary = (avg_output[i].squeeze(0).detach().cpu().numpy() == 2).astype(np.float32)
@@ -284,6 +235,7 @@ def train_grayscale():
                         cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
                         cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
                         cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+                        
                         # b0_pred, b1_pred = compute_betti_numbers(output[i])
                         # b0_img_prc, b1_img_prc = compute_betti_numbers(avg_output[i].squeeze(0))
                         # b0_gt, b1_gt = compute_betti_numbers(labels[i])
@@ -298,6 +250,7 @@ def train_grayscale():
                         # dl_sdf_mse = np.mean((dl_sdf - gt_sdf) ** 2)
                         # img_prc_sdf_mse = np.mean((img_prc_sdf - gt_sdf) ** 2)
                         # print(dl_sdf_mse.shape)
+                        
                         iou,img_prc_iou =  visulaize_iou_metrics(raw_images=images[i], epoch=epoch, batch=train_batch, predicted_structures = output[i],
                                                                  gt = labels[i],image_processing_result=avg_output[i],betti_error_pred=cl_dice_dl,betti_error_img_prc=cl_dice_img_prc,save_path= f'{save_parent_dir}/train')
                         group = {
@@ -322,10 +275,11 @@ def train_grayscale():
                         )
                         plot2_overlay(labels[i].detach().cpu().numpy(),output[i].detach().cpu().numpy(),avg_output[i].squeeze(0).detach().cpu().numpy(),(cl_dice_dl,cl_prec,cl_rec),
                                       (cl_dice_img_prc,cl_prec_i,cl_rec_i),save_path=f'{save_parent_dir}/train/Epoch {epoch}/IoU Metric',batch = train_batch)
+                        
                         train_iou_dl += iou
                         train_iou_img_prc += img_prc_iou
-                        train_sdf_mse_image_prc += cl_dice_img_prc
-                        train_sdf_mse_dl += cl_dice_dl
+                        train_cl_dice_image_prc += cl_dice_img_prc
+                        train_cl_dice_dl += cl_dice_dl
                         # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
                         # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
                         # fig, ax = plt.subplots(figsize=(6, 5))
@@ -353,39 +307,37 @@ def train_grayscale():
                     val_iou_dl = 0.0
                     val_iou_img_prc = 0.0
                     val_img_proc_dice_loss = 0.0
-                    val_sdf_mse_image_prc = 0.0
-                    val_sdf_mse_dl = 0.0
+                    val_cl_dice_image_prc = 0.0
+                    val_cl_dice_dl = 0.0
+
                     for images, labels, avg_output in val_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
                         avg_output = avg_output.to(device)
                         labels = labels.squeeze(1)
                         avg_output_classes = avg_output.squeeze(1)
-                        #gt_sdf = sdf.to(device)
-                        # avg_output_classes = (avg_output *2).round().long().squeeze(1)
+                        
 
                         avg_output_one_hot = F.one_hot(avg_output_classes, num_classes=3).permute(0, 3, 1, 2).to(device)
 
                         output_logits = model(images, avg_output_one_hot, alpha)
-                        # output_softmax = torch.softmax(output_logits.detach(), dim=1)[:,2]
                         output_softmax = torch.softmax(output_logits.detach(), dim=1)
                         output = torch.argmax(output_logits,
                                               dim=1)  # Using argmax since the output is only raw logits and argmax makes you choose the maximum of the labels. So the 3 channels (3 classes) is converted to 1 channel the max value.
+                        
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
                         targets_onehot = targets_onehot.permute(0, 3, 1, 2)  # (B, C, H, W)
                         targets_onehot = targets_onehot.float()
                         # print('One Hot Targets', targets_onehot.shape, 'Unique Values',
                         #      targets_onehot.unique(return_counts=True))
 
-                        print('Labelss type', labels.dtype)
+                        
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                        print(output.shape)
                         dice_loss = cl_dice(targets_onehot,output_softmax,val_batch)
                         img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),val_batch)
-                        # boundary_loss = sdf_loss(output_softmax, gt_sdf_white)
-                        # loss = cross_entropy_loss + sdf_loss
+                        
                         loss = cross_entropy_loss + dice_loss
 
                         val_img_proc_dice_loss += img_processing_dice_loss
@@ -407,6 +359,7 @@ def train_grayscale():
                             plt.imsave(f'{save_parent_dir}/val/Epoch {epoch}/result_{val_batch}.png',
                                        output[i].detach().cpu().numpy(), cmap='gray', vmin=0, vmax=2)
                             plt.close()
+                            
                             predicted_binary = (output[i].detach().cpu().numpy() == 2).astype(np.float32)
                             gt_binary = (labels[i].detach().cpu().numpy() == 2).astype(np.float32)
                             img_prc_binary = (avg_output[i].squeeze(0).detach().cpu().numpy()==2).astype(np.float32)
@@ -467,8 +420,8 @@ def train_grayscale():
                                           batch=val_batch)
                             val_iou_dl += iou_dl
                             val_iou_img_prc += iou_img_prc
-                            val_sdf_mse_image_prc +=cl_dice_img_prc
-                            val_sdf_mse_dl += cl_dice_dl
+                            val_cl_dice_image_prc +=cl_dice_img_prc
+                            val_cl_dice_dl += cl_dice_dl
 
                             # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
                             # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
@@ -495,13 +448,11 @@ def train_grayscale():
                     test_batch = 0
                     test_iou_dl = 0.0
                     test_iou_img_prc = 0.0
-                    test_sdf_mse_img_proc = 0.0
-                    test_sdf_mse_dl = 0.0
+                    test_cl_dice_img_proc = 0.0
+                    test_cl_dice_dl = 0.0
                     test_image_processing_dice_loss = 0.0
-                    if epoch < 250:  # For weighing ce_loss and sdf loss
-                        alpha = epoch / 250
-                    else:
-                        alpha = 1
+                
+                    
                     for images, labels, avg_output in test_dataloader:
                         images = images.to(device)
                         labels = labels.to(device)
@@ -522,10 +473,10 @@ def train_grayscale():
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
                         targets_onehot = targets_onehot.permute(0, 3, 1, 2)  # (B, C, H, W)
                         targets_onehot = targets_onehot.float()
-                        print('One Hot Targets', targets_onehot.shape, 'Unique Values',
-                              targets_onehot.unique(return_counts=True))
+                        # print('One Hot Targets', targets_onehot.shape, 'Unique Values',
+                        #       targets_onehot.unique(return_counts=True))
 
-                        print('Labels dtype',labels.dtype)
+                        # print('Labels dtype',labels.dtype)
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
@@ -614,8 +565,8 @@ def train_grayscale():
                                                                         save_path=f'{save_parent_dir}/test')
                             test_iou_dl += iou_dl
                             test_iou_img_prc += iou_img_prc
-                            test_sdf_mse_dl += cl_dice_dl
-                            test_sdf_mse_img_proc += cl_dice_img_prc
+                            test_cl_dice_dl += cl_dice_dl
+                            test_cl_dice_img_proc += cl_dice_img_prc
                             # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
                             # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
                             # fig, ax = plt.subplots(figsize=(6, 5))
@@ -626,40 +577,40 @@ def train_grayscale():
                             # plt.close(fig)
                             test_batch += 1
 
-            print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))
-            print('Test IoU for deep learning', test_iou_dl / len(test_idx))
-            print('Test IoU for image processing ', test_iou_img_prc / len(test_idx))
+                print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))
+                print('Test IoU for deep learning', test_iou_dl / len(test_idx))
+                print('Test IoU for image processing ', test_iou_img_prc / len(test_idx))
 
-            if test_loss / len(test_dataloader) < best_loss:
-                best_loss = test_loss / len(test_dataloader)
-                torch.save(model,'./convolutional_network_chkpoint/convolutional_chkpoint.pth')
-                print(f'Model Saved with test loss {test_loss / len(test_dataloader):.4f}')
+                if test_loss / len(test_dataloader) < best_loss:
+                    best_loss = test_loss / len(test_dataloader)
+                    torch.save(model,'./convolutional_network_chkpoint/convolutional_chkpoint.pth')
+                    print(f'Model Saved with test loss {test_loss / len(test_dataloader):.4f}')
 
-            run.log({'epoch': epoch,
-                     'alpha': alpha,
-                     # 'learning_rate': scheduler.get_last_lr()[0],
-                     'Train_Total_Loss': train_loss / len(train_dataloader),
-                     'Test_Total_Loss': test_loss / len(test_dataloader),
-                     'Val Loss': val_loss / len(val_dataloader),
-                     # 'Train_CE_Loss': train_cross_entropy_loss / len(train_dataloader),'Test_CE_Loss': test_cross_entropy_loss / len(test_dataloader),
-                     'Train IoU': train_iou_dl / len(train_idx),
-                     'Train IoU_img': train_iou_img_prc / len(train_idx),
-                     'Test IoU': test_iou_dl / len(test_idx),
-                     'Test IoU_img': test_iou_img_prc / len(test_idx),
-                     'Val IoU': val_iou_dl / len(val_idx), 'Val IoU img': val_iou_img_prc / len(val_idx),
-                     'Train_Img_Processing_Dice Loss': train_img_proc_dice_loss/len(train_dataloader),
-                     'Val_Img_Proccessing_Dice Loss': val_img_proc_dice_loss/len(val_dataloader),
-                     'Test_Img_Processing_Dice Loss': test_image_processing_dice_loss/len(test_dataloader),
-                     'Train Dice Loss': train_dice_loss / len(train_dataloader), 'Test_Dice_Loss': test_dice_loss / len(test_dataloader),
-                     'Val Dice Loss': val_dice_loss/len(val_dataloader),
+                run.log({'epoch': epoch,
+                        'alpha': alpha,
+                        # 'learning_rate': scheduler.get_last_lr()[0],
+                        'Train_Total_Loss': train_loss / len(train_dataloader),
+                        'Test_Total_Loss': test_loss / len(test_dataloader),
+                        'Val Loss': val_loss / len(val_dataloader),
+                        # 'Train_CE_Loss': train_cross_entropy_loss / len(train_dataloader),'Test_CE_Loss': test_cross_entropy_loss / len(test_dataloader),
+                        'Train IoU': train_iou_dl / len(train_idx),
+                        'Train IoU_img': train_iou_img_prc / len(train_idx),
+                        'Test IoU': test_iou_dl / len(test_idx),
+                        'Test IoU_img': test_iou_img_prc / len(test_idx),
+                        'Val IoU': val_iou_dl / len(val_idx), 'Val IoU img': val_iou_img_prc / len(val_idx),
+                        'Train_Img_Processing_Dice Loss': train_img_proc_dice_loss/len(train_dataloader),
+                        'Val_Img_Proccessing_Dice Loss': val_img_proc_dice_loss/len(val_dataloader),
+                        'Test_Img_Processing_Dice Loss': test_image_processing_dice_loss/len(test_dataloader),
+                        'Train Dice Loss': train_dice_loss / len(train_dataloader), 'Test_Dice_Loss': test_dice_loss / len(test_dataloader),
+                        'Val Dice Loss': val_dice_loss/len(val_dataloader),
 
-                     'Train_Img_Processing_Cldice': train_sdf_mse_image_prc / len(train_idx),
-                     'Val_Img_Proccessing_Cldice': val_sdf_mse_image_prc / len(val_idx),
-                     'Test_Img_Processing_Cldice': test_sdf_mse_img_proc / len(test_idx),
-                     'Train Cldice DL': train_sdf_mse_dl / len(train_idx),
-                     'Test Cldice DL': test_sdf_mse_dl / len(test_idx),
-                     'Val Cldice DL': val_sdf_mse_dl / len(val_idx),
-                     })
+                        'Train_Img_Processing_Cldice': train_cl_dice_image_prc / len(train_idx),
+                        'Val_Img_Proccessing_Cldice': val_cl_dice_image_prc / len(val_idx),
+                        'Test_Img_Processing_Cldice': test_cl_dice_img_proc / len(test_idx),
+                        'Train Cldice DL': train_cl_dice_dl / len(train_idx),
+                        'Test Cldice DL': test_cl_dice_dl / len(test_idx),
+                        'Val Cldice DL': val_cl_dice_dl / len(val_idx),
+                        })
 
         wandb.finish()
 

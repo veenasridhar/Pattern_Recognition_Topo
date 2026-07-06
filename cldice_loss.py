@@ -72,7 +72,7 @@ class soft_dice_cldice(nn.Module):
         self.soft_skeletonize = SoftSkeletonize(num_iters=5)
         self.exclude_background = exclude_background
 
-    def forward(self, y_true, y_pred,index):
+    def forward(self, y_true, y_pred):
         if self.exclude_background:
             y_true = y_true[:, 2:, :, :]
             y_pred = y_pred[:, 2:, :, :]
@@ -86,15 +86,15 @@ class soft_dice_cldice(nn.Module):
         # cv2.imshow('True', skel_true)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
-        fig, ax = plt.subplots(1,2,figsize=(10,5))
+        # fig, ax = plt.subplots(1,2,figsize=(10,5))
 
-        ax[0].imshow(skel_true[0].permute(1,2,0).detach().cpu().numpy())
-        ax[0].axis('off')
+        # ax[0].imshow(skel_true[0].permute(1,2,0).detach().cpu().numpy())
+        # ax[0].axis('off')
 
-        ax[1].imshow(skel_pred[0].permute(1,2,0).detach().cpu().numpy())
-        ax[1].axis('off')
-        plt.savefig(f'./Skeletons_gt/skeleton_{index}.png',)
-        plt.close()
+        # ax[1].imshow(skel_pred[0].permute(1,2,0).detach().cpu().numpy())
+        # ax[1].axis('off')
+        # plt.savefig(f'./Skeletons_gt/skeleton_{index}.png',)
+        # plt.close()
         # plt.show()
         tprec = (torch.sum(torch.multiply(skel_pred, y_true))+self.smooth)/(torch.sum(skel_pred)+self.smooth)
         tsens = (torch.sum(torch.multiply(skel_true, y_pred))+self.smooth)/(torch.sum(skel_true)+self.smooth)

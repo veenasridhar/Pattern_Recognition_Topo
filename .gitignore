@@ -36,12 +36,14 @@ venv/
 /Residual Convolutional Network Results_original size/
 /Median Output/
 /Learned Aggregation/
-/output_images_1/
+/output_*
 /output_images_2/
 /output_images_3/
 /split_fold1.json
 /split_fold2.json
-/Residual Convolutional Network Results_original size_Fold 1/
+/Residual *
 /output_images/
 /convolutional_network_chkpoint/
 /Residual Convolutional Network Results_original size_Fold 2/
+*.sh
+slurm-*
