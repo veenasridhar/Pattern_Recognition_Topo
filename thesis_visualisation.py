@@ -84,6 +84,8 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
 
         cld_pred  = grp['cld_pred'];  prec_pred = grp['prec_pred'];  rec_pred = grp['rec_pred']
         cld_base  = grp['cld_base'];  prec_base = grp['prec_base'];  rec_base = grp['rec_base']
+        iou_dl = grp['iou_dl']
+        iou_img_prc = grp['iou_img_prc']
 
         # all 4 rows equal height
         inner_gs = gridspec.GridSpecFromSubplotSpec(
@@ -146,7 +148,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         #                           fontstyle='italic', pad=3)
         # metrics as xlabel directly under overlay
         ax_pred.set_xlabel(
-            f"clDice: {cld_pred:.3f}  |  clP: {prec_pred:.3f}  |  clR: {rec_pred:.3f}",
+            f"clDice: {cld_pred:.3f}  |  clP: {prec_pred:.3f}  |  clR: {rec_pred:.3f} \n iou:{iou_dl}",
             fontsize=10, fontweight='bold',color='#111111', labelpad=3
         )
 
@@ -168,7 +170,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         #     ax_base_ov.set_title("Baseline Overlay", fontsize=7.5,
         #                           fontstyle='italic', pad=3)
         ax_base.set_xlabel(
-            f"clDice: {cld_base:.3f}  |  clP: {prec_base:.3f}  |  clR: {rec_base:.3f}",
+            f"clDice: {cld_base:.3f}  |  clP: {prec_base:.3f}  |  clR: {rec_base:.3f}\n iou:{iou_img_prc}",
             fontsize=10, fontweight='bold', color='#111111', labelpad=3
         )
 

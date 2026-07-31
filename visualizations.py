@@ -205,25 +205,27 @@ def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, origin
 
 def visulaize_images_individual(batch,epoch, reconstructed_image, original, gt_image, save_path, index,test=False):
 
-    reconstructed_image = torch.clamp(reconstructed_image, 0, 1)
-    original = torch.clamp(original, 0, 1)
+    # reconstructed_image = torch.clamp(reconstructed_image, 0, 1)
+    # original = torch.clamp(original, 0, 1)
 
     num_images = reconstructed_image.shape[0]
     fig, axes = plt.subplots(2, num_images, figsize=(16, 8))
     # Original Image
     if num_images == 1:
-        orig_img = original[0].permute(1, 2, 0).detach().cpu().numpy()
-        axes[0].imshow(orig_img)
+        orig_img = original[0]*0.5
+        orig_img = orig_img.squeeze(-1).detach().cpu().numpy()
+        axes[0].imshow(orig_img, cmap='gray',vmin = orig_img.min(), vmax = orig_img.max())
         axes[0].set_title(f'Original {0 + 1}')
         axes[0].axis('off')
 
         # Reconstruction Images
         #recon_images = reconstructed_image[0].detach().cpu().numpy()
-        recon_images = reconstructed_image[0].permute(1, 2, 0).detach().cpu().numpy()
-        axes[1].imshow(recon_images,cmap='gray')
-        iou_metric, overlap_image = iou_metrics(recon_images, orig_img, tolerance=0)
-        axes[1].set_title(f'IoU Metric {iou_metric:.2f}')
-        axes[1].axis('off')
+        recon_images = reconstructed_image.permute(1, 2, 0).detach().cpu().numpy()
+        print('The shape of the reconstructed image',recon_images.shape)
+        axes[1].imshow(recon_images,cmap='gray',vmin= recon_images.min(), vmax = recon_images.max())
+        # iou_metric, overlap_image = iou_metrics(recon_images, orig_img, tolerance=0)
+        # axes[1].set_title(f'IoU Metric {iou_metric:.2f}')
+        # axes[1].axis('off')
     else:
         for j in range(num_images):
             orig_img = original[j].permute(1, 2, 0).detach().cpu().numpy()

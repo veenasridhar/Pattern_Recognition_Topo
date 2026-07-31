@@ -8,8 +8,8 @@ from diffusers import AutoencoderKL
 import torch.nn as nn
 from torchvision.transforms import v2
 from torchinfo import summary
-from cldice_vis import visualize_cldice_comparison_grid
-from input_pipeline import *
+from cldice_vis import *
+#from input_pipeline_discrete import *
 from tqdm import tqdm
 from torchmetrics import StructuralSimilarityIndexMeasure
 import matplotlib.pyplot as plt
@@ -18,87 +18,6 @@ from thesis_visualisation import visualize_comparison_with_overlay
 from visualizations import *
 from attSets import AttSets
 from cldice_loss_vae import *
-
-
-class VGGPerceptualLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-        vgg = models.vgg16(pretrained=True)
-
-        self.feature_map1 = nn.Sequential(*list(vgg.features)[:4])
-        self.feature_map2 = nn.Sequential(*list(vgg.features)[4:9])
-        self.feature_map3 = nn.Sequential(*list(vgg.features)[9:16])
-        self.feature_map4 = nn.Sequential(*list(vgg.features)[16:23])
-
-        for p in self.parameters():
-            p.requires_grad = False
-
-    def forward(self,real,reconstructed):
-        #Normalize the input as per VGG Model expectations
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1).to(real.device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1).to(real.device)
-        real = (real - mean) / std
-        recon = (reconstructed - mean) / std
-        mse_loss = torch.nn.MSELoss().to(real.device)
-
-        loss = 0.0
-        real_input = real
-        recon_input = recon
-
-        for feature_map in [self.feature_map1, self.feature_map2, self.feature_map3, self.feature_map4]:
-            real_input = feature_map(real_input)
-            recon_input = feature_map(recon_input)
-            #print(real_input.shape,recon_input.shape)
-            loss += mse_loss(recon_input,real_input.detach())
-
-        return loss
-
-def recon_to_struct_prob(predicted,tau=0.1, center=0.5):
-    # Compute clDice loss for predicted and target tensors
-    gray = predicted.mean(dim=1, keepdim=True)          # collapse RGB -> (B,1,H,W)
-    print('The unique values of the predicted gray image are',gray.unique())
-    #gray = ((gray + 1) / 2).clamp(0, 1)             # 0 void, 0.5 non-design, 1 structure
-    p_struct = torch.sigmoid((gray - center) / tau) # soft-isolate the 1 class
-    return p_struct
-
-def compute_cldice_loss(predicted, target):
-
-    cl_dice_loss = soft_dice_cldice()
-    p_struct = recon_to_struct_prob(predicted)
-    #cv2.imwrite(f'predicted_structures_{index}.png', (p_struct[0,0].detach().cpu().numpy() * 255).astype(np.uint8))
-    gt_gray = ((target.mean(dim=1, keepdim=True) + 1) / 2).clamp(0, 1)
-    gt_struct = (gt_gray > 0.75).float()                   # hard binary GT foreground
-    #cv2.imwrite(f'gt_{index}.png', (gt_struct[0,0].detach().cpu().numpy() * 255).astype(np.uint8))
-
-    print('The shape of predicted structures is',p_struct.shape)
-    print('The shape of ground truth structures is',gt_struct.shape)
-    
-    loss = cl_dice_loss(p_struct, gt_struct)
-    return loss
-
-
-def decoder_output_to_classes(recon):
-    # recon: (B,3,H,W) in ~[-1,1]  ->  class map (B,H,W): 0=void, 1=non-design, 2=structure
-    gray = recon.mean(dim=1)                # (B,H,W)
-    classes = torch.ones_like(gray)         # default: non-design
-    classes[gray < -0.5] = 0                # void
-    classes[gray >  0.5] = 2                # structure
-    return classes.long()
-
-def gt_output_to_classes(recon):
-    # recon: (B,3,H,W) in ~[-1,1]  ->  class map (B,H,W): 0=void, 1=non-design, 2=structure
-    gray = recon.mean(dim=1)                # (B,H,W)
-    classes = torch.ones_like(gray)         # default: non-design
-    classes[gray == 0.0] = 0                # void
-    classes[gray >  0.5] = 2                # structure
-    return classes.long()
-
-def classes_to_gt_image(classes):
-    # class map -> uint8 image with your GT encoding 0/128/255
-    lut = torch.tensor([0, 128, 255], dtype=torch.uint8, device=classes.device)
-    print('The unique values of the classes are',torch.unique(classes))
-    return lut[classes] 
-
 
 class VAEGANFineTuner:
 
@@ -111,10 +30,10 @@ class VAEGANFineTuner:
         self.aggregation_module = self.aggregation_module.to(device)
         self.vae.to(self.device)
         #self.PROJECT_NAME = 'Individual Reconstruction Cross Validation'
-        self.PROJECT_NAME = 'Topology Optimization'
+        self.PROJECT_NAME = 'Topology Optimization_final'
 
 
-    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=101, lr=0.001, kl_weight=1e-6, latent_technique = 'learned_aggregation', save_path="./finetuned_vae"):
+    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=51, lr=0.0001, kl_weight=1e-6, latent_technique = 'learned_aggregation', save_path="./finetuned_vae"):
 
         # Start a new wandb run to track this script.
         run = wandb.init(
@@ -122,41 +41,64 @@ class VAEGANFineTuner:
             entity="veenasridhar96-university-of-stuttgart",
             # Set the wandb project where this run will be logged.
             #project=self.PROJECT_NAME,
-            name = 'Topology Optimization',
+            name = f'Topology Optimization_{latent_technique}_{fold}',
             #job_type= f'run- {fold}',
             # Track hyperparameters and run metadata.
             config={
                 "learning_rate": lr,
                 #'kl_weight': kl_weight,
                 'latent_technique': latent_technique,
-                'loss': 'Perceptual Loss ',
+                'loss': 'CE+CLDice',
                 "architecture": "VAE",
-                "dataset": "TO",
+                "dataset": "OpenTO + TO",
                 "epochs": epochs,
                 "fold": fold,
             }, )
 
         #torch.autograd.set_detect_anomaly(True)
+        save_path = 'output_images_withOpenTOData'
+
+       
+
+
 
         if self.multi_image_mode:
-            decoder_optimizer = torch.optim.AdamW(self.vae.decoder.parameters(), lr=lr,weight_decay=1e-4)
+
+            for name, module in self.vae.named_modules():
+            #print(name, "->", module.__class__.__name__)
+                for p in module.parameters():
+                        p.requires_grad = False
+
+            # trainable_modules = [
+            #     self.vae.decoder.up_blocks[2],
+            #     self.vae.decoder.up_blocks[3],   # final upsampling block (highest resolution)
+            #     self.vae.decoder.conv_norm_out,
+            #     self.vae.decoder.conv_out,
+            # ]
+            # for module in trainable_modules:
+            #     for p in module.parameters():
+            #         p.requires_grad = True
+
+            #decoder_optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.vae.decoder.parameters()), lr=lr, weight_decay=1e-2)
+            
             if latent_technique == 'learned_aggregation':
-                aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=0.001, weight_decay=1e-4)
+                aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=0.0001, weight_decay=1e-2)
                 print('The training parameters for the aggregation module are',sum(p.numel() for p in self.aggregation_module.parameters() if p.requires_grad))
 
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(decoder_optimizer, T_max=epochs)
+            # print('The training parameters for the decoder module are',sum(p.numel() for p in self.vae.decoder.parameters() if p.requires_grad))
+            # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(decoder_optimizer, T_max=epochs)
         else:
             optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr, weight_decay=1e-4)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-        perceptual_loss = VGGPerceptualLoss().to(self.device)
-        #cldice_loss = soft_dice_cldice()
-        mse_loss = torch.nn.MSELoss()
-        ce_weights = torch.tensor([0.25, 0.35, 0.5],device=self.device)
-        ce_loss = torch.nn.CrossEntropyLoss(weight= ce_weights)
+        
+        cldice_loss = soft_dice_cldice()
+        #ce_weights = torch.tensor([0.25, 0.35, 0.5],device=self.device)weight= ce_weights
+        ce_loss = torch.nn.CrossEntropyLoss()
         best_loss = float('inf')
 
         for epoch in range(epochs):
+            
             self.vae.train()
             train_vae_loss = 0.0
             train_recon_loss = 0.0
@@ -169,13 +111,15 @@ class VAEGANFineTuner:
             train_clprec_img_prc = 0.0
             train_clrec_dl =0.0
             train_clrec_img_prc = 0.0
+            train_total_ce_loss = 0.0
+            train_total_cldice_loss = 0.0
 
             train_progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
             index =0
 
             if self.multi_image_mode:
-                accum_steps = 4
-                decoder_optimizer.zero_grad()
+                accum_steps = 8
+                #decoder_optimizer.zero_grad()
                 
                 if latent_technique == 'learned_aggregation':
                     self.aggregation_module.train()
@@ -187,27 +131,21 @@ class VAEGANFineTuner:
                     images = images.to(self.device)         # (B,N,C,H,W) = (1,5,3,256,256)
                     target = gt.to(self.device)             # (B,C,H,W) = (1,3,256,256)
 
-                    # # Channel Permutation
-                    # B, N, C, H, W = images.shape
-                    # channels_perm = torch.randperm(C, device = images.device)
-                    # print('The permutation of the channels is',channels_perm)
-                    # images = images[:, :, channels_perm, :, :]
-            
                     batch_size, num_imgs = images.shape[0], images.shape[1]
                     combinedimages = images.reshape(-1, *images.shape[2:]).to(self.device)          #(B*N,C,H,W) = (10,3,256,256)
                     # The above line reshapes the input images from (B,N,C,H,W) to (B*N,C,H,W) where *images.shape[2:] (the * is called the argument unpacking unpacks (C,H,W) and the -1
                     # in the first indes allows python to infer the dimensions on its own while maintaining the data count so for the first indes B*N is done.)
 
                     # Sampling happens from Diffusers library
-                    print('The shape of combined images',combinedimages.shape)
+                    #print('The shape of combined images',combinedimages.shape)
 
                     with torch.no_grad():                                               # Encoder is not trained during the multi iamge mode
                         print('The unique values of the input images are',combinedimages.unique())
                         posterior = self.vae.encode(combinedimages).latent_dist        # Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
-                        target_posterior = self.vae.encode(target).latent_dist
+                        #target_posterior = self.vae.encode(target).latent_dist
                         individual_mu = posterior.mean       # Individual mu is mean represented using 4 latent variables (10,4,32,32)
                         log_var = posterior.logvar          # Log variance represent the uncertainty or spread of the distribution. (log for stability)
-                        target_mu = target_posterior.mean
+                        #target_mu = target_posterior.mean
 
                     # Reshape it to (B,N,latent_dimension,H,W)
                     mu = individual_mu.reshape(batch_size, num_imgs, *individual_mu.shape[1:])  # (B,N,latent_dimension,H,W) = (2,5,4,32,32)
@@ -249,105 +187,109 @@ class VAEGANFineTuner:
 
                     #with torch.no_grad():
                     reconstructed = self.vae.decode(z_averaged).sample
-                    #print('Reconstructed Unique',reconstructed[0].permute(1,2,0).unique())
 
-                    #print("Reconstructed:", reconstructed.shape, reconstructed.dtype)
-                    #print('Target:',target.shape)
+                    print('The unique elements in reconstructed image',reconstructed.unique())
+                    print('The unique elements in target image',target.unique())
 
-                    #reconstruction_loss = ce_loss(reconstructed,target)
-                    #recosntrcution_loss = mse_loss(reconstructed, target)
-                    train_perceptual_loss = perceptual_loss(target,reconstructed)
+
                     train_ce_loss = ce_loss(reconstructed,target)
-                    cldice_loss = compute_cldice_loss(reconstructed,target)
-                    reconstruction_loss =  train_perceptual_loss
+                    probs       = torch.softmax(reconstructed, dim=1)
+                    member_prob = probs[:, 2:3]
+                    member_gt   = (target == 2).float().unsqueeze(1)
+                    train_cldice_loss = cldice_loss(member_prob,member_gt)
+                    reconstruction_loss =  0.3 * train_ce_loss + train_cldice_loss * 0.7
                     #latent_space_exploration(individual_mu, z_averaged, target_mu, self.vae)
 
-                    loss = train_perceptual_loss
-
-                    predicted_binary = extract_foreground_mask(reconstructed[i].permute(1,2,0).detach().cpu().numpy())
-                    # plt.imsave(os.path.join(f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}', f'predicted_binary_{epoch}_{batch}_{index}.png'),
-                    #            predicted_binary, cmap='gray')
-                    # red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
-                    gt_binary = extract_foreground_mask(target[i].permute(1, 2, 0).detach().cpu().numpy())
-                    img_prc_binary = extract_foreground_mask(
-                        avg_result[i].permute(1, 2, 0).detach().cpu().numpy())
-
-                    predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
-                    gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
-                    img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
-
-                    cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
-                    cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
-                    cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
-
-                    cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
-                    cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
-                    cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
-
-                    train_cldice_dl += cl_dice_dl
-                    train_cldice_img_prc += cl_dice_img_prc
-                    train_clprec_dl += cl_prec
-                    train_clprec_img_prc += cl_prec_i
-                    train_clrec_dl += cl_rec
-                    train_clrec_img_prc += cl_rec_i
-                    iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap = visulaize_iou_metrics(predicted_binary, gt_binary, img_prc_binary, tolerance=0)
-                    train_iou_dl += iou_dilated
-                    train_iou_img_prc += iou_dilated_image_processing
+                    loss = reconstruction_loss
 
                     #Backpropogation based on every step in the epoch - Gradient Accumulation
                     (loss / accum_steps).backward()
                     if (batch + 1) % accum_steps == 0:
-                        torch.nn.utils.clip_grad_norm_(self.vae.decoder.parameters(), 1.0)
+                        # torch.nn.utils.clip_grad_norm_(self.vae.decoder.parameters(), 1.0)
                         if latent_technique == 'learned_aggregation':
                             torch.nn.utils.clip_grad_norm_(self.aggregation_module.parameters(), 1.0)
                             aggregation_module_optimizer.step()
                             aggregation_module_optimizer.zero_grad()
-                        decoder_optimizer.step()
-                        decoder_optimizer.zero_grad()
+                        # decoder_optimizer.step()
+                        # decoder_optimizer.zero_grad()
 
                     #Aggregating the loss values for each step in the epoch to output finally as a epoch loss values
                     train_vae_loss +=loss.item()
                     train_recon_loss +=reconstruction_loss.item()
+                    train_total_ce_loss += train_ce_loss.item()
+                    train_total_cldice_loss += train_cldice_loss.item()
 
-                    #reconstructed = torch.argmax(reconstructed, dim=1)
+                    for i in range(len(reconstructed)):
+                        
+                        # print('The shape of the reconstructed image',reconstructed[i].shape)
+                        # print('The shape of the target image',target[i].shape)
+                        # print('The shape of avg_result image',avg_result[i].shape)
 
-                    if epoch % 5 == 0:
-                        if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}')):
-                            os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}'))
-                        if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/train')):
-                            os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/train'))
-                        if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}')):
-                            os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}'))
-                        if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}', 'Metrics')):
-                            os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}','Metrics'))
+                        reconstructed = torch.argmax(reconstructed[i], dim=0)
 
-                        for i in range(len(reconstructed)):
+                        predicted_binary = (reconstructed == 2).detach().cpu().numpy().astype(np.float32)
+                        gt_binary = (target[i] == 2).detach().cpu().numpy().astype(np.float32)
+                        img_prc_binary = (avg_result[i] ==2).detach().cpu().numpy().astype(np.float32)
+
+                        predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+                        gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+                        img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+
+                        cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
+                        cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+                        cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+
+                        cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+                        cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+                        cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+
+                        train_cldice_dl += cl_dice_dl
+                        train_cldice_img_prc += cl_dice_img_prc
+                        train_clprec_dl += cl_prec
+                        train_clprec_img_prc += cl_prec_i
+                        train_clrec_dl += cl_rec
+                        train_clrec_img_prc += cl_rec_i
+                        iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap = visulaize_iou_metrics(predicted_binary, gt_binary, img_prc_binary, tolerance=0)
+                        train_iou_dl += iou_dilated
+                        train_iou_img_prc += iou_dilated_image_processing
+
+                        # if epoch % 5 == 0:
+                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
+                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
+                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train')):
+                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train'))
+                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}')):
+                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}'))
+                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}', 'Metrics')):
+                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}','Metrics'))
+
+                        #     plt.imsave(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}', f'{save_path}_{index}.png'),
+                        #            reconstructed.detach().cpu().numpy(), cmap='gray', vmin = reconstructed.min(), vmax = reconstructed.max())
                             
-                            plt.imsave(os.path.join(f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}', f'output_images_{index}.png'),
-                                        torch.clamp(reconstructed[i],0,1).permute(1, 2, 0).detach().cpu().numpy())
-
-                            group = {
-                                'inputs': images[i].detach().cpu().numpy(),
-                                'gt': target[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                'gt_foreground': gt_binary,
-                                'pred': reconstructed[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                'pred_foreground':predicted_binary,
-                                'baseline': avg_result[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                'baseline_foreground':img_prc_binary,
-                                'label': f'Batch {index}',
-                                # clDice already computed above — just pass them in
-                                'cld_pred': cl_dice_dl,
-                                'prec_pred': cl_prec,
-                                'rec_pred': cl_rec,
-                                'cld_base': cl_dice_img_prc,
-                                'prec_base': cl_prec_i,
-                                'rec_base': cl_rec_i,
-                            }
-                            visualize_cldice_comparison_grid([group], epoch=epoch, batch=index, fold=fold,save_path=f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics')
-                            
-                            visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
-                                         img_proc_dilated_overlap, f'./output_images_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics', index, False)
-                            index += 1
+                        #     group = {
+                        #         'inputs': images[i].detach().cpu().numpy(),
+                        #         'gt': target[i].detach().cpu().numpy(),
+                        #         'gt_foreground': gt_binary,
+                        #         'pred': reconstructed.detach().cpu().numpy(),
+                        #         'pred_foreground':predicted_binary,
+                        #         'baseline': avg_result[i].detach().cpu().numpy(),
+                        #         'baseline_foreground':img_prc_binary,
+                        #         'label': f'Batch {index}',
+                        #         # clDice already computed above — just pass them in
+                        #         'cld_pred': cl_dice_dl,
+                        #         'prec_pred': cl_prec,
+                        #         'rec_pred': cl_rec,
+                        #         'cld_base': cl_dice_img_prc,
+                        #         'prec_base': cl_prec_i,
+                        #         'rec_base': cl_rec_i,
+                        #         'iou_base': iou_dilated_image_processing,
+                        #         'iou_pred': iou_dilated
+                        #     }
+                        #     visualize_cldice_comparison_grid_discrete([group], epoch=epoch, batch=index, fold=fold,save_path=f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics')
+                        
+                        #     # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
+                        #     #                  img_proc_dilated_overlap, f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics', index, False)
+                        #     index += 1
 
                     # Printing the step loss values in the progress bar
                     train_progress_bar.set_postfix({
@@ -361,10 +303,10 @@ class VAEGANFineTuner:
                         torch.nn.utils.clip_grad_norm_(self.aggregation_module.parameters(), 1.0)
                         aggregation_module_optimizer.step()
                         aggregation_module_optimizer.zero_grad()
-                    decoder_optimizer.step()
-                    decoder_optimizer.zero_grad()
+                    # decoder_optimizer.step()
+                    # decoder_optimizer.zero_grad()
                 
-                scheduler.step()
+                #scheduler.step()
         
             ###################################
             ### Single Image Mode
@@ -386,16 +328,18 @@ class VAEGANFineTuner:
 
                     reconstructed = self.vae.decode(z).sample
 
-                    # print('Reconstructed Unique Values',reconstructed.unique())
-                    # print('Target Unique Values',target.unique())
-                    # print('Reconstructed shape', reconstructed.shape)
-                    # print('Target Unique Values', target.shape)
+                    print('Reconstructed Unique Values',reconstructed.unique())
+                    print('Target Unique Values',target.unique())
+                    print('Reconstructed shape', reconstructed.shape)
+                    print('Target Unique Values', target.shape)
 
-                    #recon_loss = mse_loss(reconstructed, target)
-                    recon_loss = perceptual_loss(target,reconstructed)
-                    #recon_loss = ce_loss(reconstructed,target)
+                    recon_loss = ce_loss(reconstructed,target)
+                    probs       = torch.softmax(reconstructed, dim=1)
+                    member_prob = probs[:, 2:3]
+                    member_gt   = (target == 2).float().unsqueeze(1)
+                    train_cldice_loss = cldice_loss(member_prob,member_gt)
                     kl_loss = posterior.kl().mean()
-                    loss = recon_loss + kl_weight * kl_loss
+                    loss = recon_loss + kl_weight * kl_loss + train_cldice_loss
 
                     (loss / accum_steps).backward()
                     if (batch + 1) % accum_steps == 0:
@@ -407,10 +351,21 @@ class VAEGANFineTuner:
                     train_vae_loss += loss.item()
                     train_recon_loss += recon_loss.item()
                     train_kl_loss += kl_loss.item()
-                    #reconstructed = torch.argmax(reconstructed, dim=1)
+                    
 
-                    #if epoch%50 == 0 :
-                    #    visulaize_images_individual(batch,epoch, reconstructed, images, None,f'./Individual Reconstruction Results/individual_images_Fold {fold}/train',False)
+                    if epoch%5 == 0 :
+                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
+                                os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
+                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
+                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train')):
+                            os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train'))
+                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}')):
+                            os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}'))
+                        print('The shape of the reconstructed individual image',reconstructed.shape)
+                        reconstructed = torch.argmax(reconstructed, dim=1)
+                        visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}',False)
+                        
                         #latent_space_exploration(individual_mu, None, None, self.vae)
                         #visualize_feature_maps(images, individual_mu, False)
 
@@ -419,6 +374,7 @@ class VAEGANFineTuner:
                         'Total loss': loss.item(),
                         'reconstruction_loss': recon_loss.item(),
                         'KL_loss': kl_loss.item(),
+                        'CLDice_loss': train_cldice_loss.item()
                     })
 
                 if (batch + 1) % accum_steps != 0:
@@ -437,6 +393,8 @@ class VAEGANFineTuner:
             val_clprec_img_prc =0.0
             val_clrec_dl =0.0
             val_clrec_img_prc =0.0
+            val_total_ce_loss = 0.0
+            val_total_cldice_loss = 0.0
 
             val_progress_bar = tqdm(val_loader,desc=f'Epoch {epoch}/{epochs}')
             if val_loader:
@@ -505,73 +463,76 @@ class VAEGANFineTuner:
 
                             #latent_space_exploration(individual_mu, averaged_mu, target_mu, self.vae)
 
-                            #reconstruction_val_loss = mse_loss(reconstructed, target)
-                            val_perceptual_loss = perceptual_loss(target,reconstructed)
-                            cldice_loss = compute_cldice_loss(reconstructed,target)
-                            reconstruction_val_loss = val_perceptual_loss
-
-                            # if latent_technique == 'product_of_gaussians':
-                            #     kl_val_loss = -0.5 *(1+combined_log_variance - combined_mu.pow(2)- combined_log_variance.exp()).mean()
-                            # elif latent_technique == 'averaging':
-                            #     kl_val_loss = -0.5 * (1 + averaged_logvar - averaged_mu.pow(2) - averaged_logvar.exp()).mean()
+                            val_ce_loss = ce_loss(reconstructed,target)
+                            probs       = torch.softmax(reconstructed, dim=1)
+                            member_prob = probs[:, 2:3]
+                            member_gt   = (target == 2).float().unsqueeze(1)
+                            val_cldice_loss = cldice_loss(member_prob,member_gt)
+                            reconstruction_val_loss =  0.3* val_ce_loss + val_cldice_loss * 0.7
 
                             val_loss = reconstruction_val_loss
 
                             val_vae_loss += val_loss.item()
                             val_mse_loss += reconstruction_val_loss.item()
-                            #val_kl_loss += kl_val_loss.item()
+                            val_total_ce_loss += val_ce_loss.item()
+                            val_total_cldice_loss += val_cldice_loss.item()
 
-                            predicted_binary = extract_foreground_mask(
-                                        reconstructed[i].permute(1, 2, 0).detach().cpu().numpy())
-                            # red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
-                            gt_binary = extract_foreground_mask(
-                                target[i].permute(1, 2, 0).detach().cpu().numpy())
-                            img_prc_binary = extract_foreground_mask(
-                                avg_result[i].permute(1, 2, 0).detach().cpu().numpy())
+                            for i in range(len(reconstructed)):
+                        
+                                # print('The shape of the reconstructed image',reconstructed[i].shape)
+                                # print('The shape of the target image',target[i].shape)
+                                # print('The shape of avg_result image',avg_result[i].shape)
 
-                            predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
-                            gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
-                            img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+                                reconstructed = torch.argmax(reconstructed[i], dim=0)
+                                
+                                predicted_binary = (reconstructed == 2).detach().cpu().numpy().astype(np.float32)
+                                gt_binary = (target[i] == 2).detach().cpu().numpy().astype(np.float32)
+                                img_prc_binary = (avg_result[i] ==2).detach().cpu().numpy().astype(np.float32)
 
-                            cl_prec = np.sum(predicted_skeleton * gt_binary) / (
-                                        np.sum(predicted_skeleton) + 1e-7)
-                            cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
-                            cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+                                predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+                                gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+                                img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
 
-                            cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
-                            cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
-                            cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+                                cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
+                                cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
 
-                            val_cldice_dl += cl_dice_dl
-                            val_cldice_img_prc += cl_dice_img_prc
-                            val_clprec_dl += cl_prec
-                            val_clprec_img_prc += cl_prec_i
-                            val_clrec_dl += cl_rec
-                            val_clrec_img_prc += cl_rec_i
-                            iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap = visulaize_iou_metrics(
-                                        predicted_binary, gt_binary, img_prc_binary, tolerance=0)
-                            val_iou_dl += iou_dilated
-                            val_iou_img_prc += iou_dilated_image_processing
+                                cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+                                cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
 
-                            if epoch % 5 ==0:
-                                if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/val')):
-                                    os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/val'))
-                                if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}')):
-                                    os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}'))
-                                if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}','Metrics')):
-                                    os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}','Metrics'))
-                                for i in range(len(reconstructed)):
-                                    plt.imsave(os.path.join(f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}',f'output_images_{epoch}_{batch}_{index}.png'),
-                                               torch.clamp(reconstructed[i],0,1).permute(1, 2, 0).detach().cpu().numpy())
+                                val_cldice_dl += cl_dice_dl
+                                val_cldice_img_prc += cl_dice_img_prc
+                                val_clprec_dl += cl_prec
+                                val_clprec_img_prc += cl_prec_i
+                                val_clrec_dl += cl_rec
+                                val_clrec_img_prc += cl_rec_i
+                                iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap = visulaize_iou_metrics(predicted_binary, gt_binary, img_prc_binary, tolerance=0)
+                                val_iou_dl += iou_dilated
+                                val_iou_img_prc += iou_dilated_image_processing
+
+                                if epoch % 1 == 0:
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val'))
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val/Epoch {epoch}')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val/Epoch {epoch}'))
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val/Epoch {epoch}', 'Metrics')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val/Epoch {epoch}','Metrics'))
+
+                                    # plt.imsave(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val/Epoch {epoch}', f'{save_path}_{index}.png'),
+                                    #     reconstructed.detach().cpu().numpy(), cmap='gray', vmin = reconstructed.min(), vmax = reconstructed.max())
+
 
                                     group = {
                                         'inputs': images[i].detach().cpu().numpy(),
-                                        'gt': target[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'gt': target[i].detach().cpu().numpy(),
                                         'gt_foreground': gt_binary,
-                                        'pred': reconstructed[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                        'pred_foreground': predicted_binary,
-                                        'baseline': avg_result[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                        'baseline_foreground': img_prc_binary,
+                                        'pred': reconstructed.detach().cpu().numpy(),
+                                        'pred_foreground':predicted_binary,
+                                        'baseline': avg_result[i].detach().cpu().numpy(),
+                                        'baseline_foreground':img_prc_binary,
                                         'label': f'Batch {index}',
                                         # clDice already computed above — just pass them in
                                         'cld_pred': cl_dice_dl,
@@ -580,14 +541,15 @@ class VAEGANFineTuner:
                                         'cld_base': cl_dice_img_prc,
                                         'prec_base': cl_prec_i,
                                         'rec_base': cl_rec_i,
+                                        'iou_base': val_iou_img_prc,
+                                        'iou_pred': val_iou_dl
                                     }
-                                    visualize_cldice_comparison_grid([group], epoch=epoch, batch=index, fold=fold,
-                                                                     save_path=f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}/Metrics')
-                                    
-                                    visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i],
-                                                     avg_result[i], iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap, f'./output_images_{latent_technique}_{fold}/val/Epoch {epoch}/Metrics', index, True)
-                                    
-                                    index +=1
+                                    visualize_cldice_comparison_grid_discrete([group], epoch=epoch, batch=index, fold=fold,save_path=f'./{save_path}_{latent_technique}_{fold}/val/Epoch {epoch}/Metrics')
+                                
+                                    # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
+                                    #                  img_proc_dilated_overlap, f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics', index, False)
+                                    index += 1
+
 
                             # Printing the step loss values in the progress bar
                             val_progress_bar.set_postfix({
@@ -606,25 +568,37 @@ class VAEGANFineTuner:
                             z = posterior.sample()
                             reconstructed = self.vae.decode(z).sample
 
-                            #recon_loss = mse_loss(reconstructed, target)
-                            #recon_loss = ce_loss(reconstructed,target)
-                            recon_loss = perceptual_loss(target, reconstructed)
+                            
+                            recon_loss = ce_loss(reconstructed,target)
+                            probs       = torch.softmax(reconstructed, dim=1)
+                            member_prob = probs[:, 2:3]
+                            member_gt   = (target == 2).float().unsqueeze(1)
+                            val_cldice_loss = cldice_loss(member_prob,member_gt)
+                                
                             kl_loss = posterior.kl().mean()
 
-                            val_loss = recon_loss + kl_weight * kl_loss
+                            val_loss = recon_loss + kl_weight * kl_loss + val_cldice_loss
 
-                            #reconstructed = torch.argmax(reconstructed,dim=1)
-                            #if epoch % 50 == 0:
-                                
-                                # visulaize_images_individual( batch, epoch, reconstructed, images, None,
-                                #                  f'./Individual Reconstruction Results/individual_images_Fold {fold}/val',
-                                #                  False)
+                            if epoch%5 == 0 :
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
+                                        os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val'))
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}'))
+                                print('The shape of the reconstructed individual image',reconstructed.shape)
+                                reconstructed = torch.argmax(reconstructed, dim=1)
+                                visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}',False)
+                        
                                 # latent_space_exploration(individual_mu, None, None, self.vae)
                                 # visualize_feature_maps(images, individual_mu, False)
 
                             val_vae_loss += val_loss.item()
                             val_mse_loss += recon_loss.item()
                             val_kl_loss += kl_loss.item()
+                            val_cldice_loss += val_cldice_loss.item()
                             #val_ssim_loss += ssim_loss.item()
 
                             # Printing the step loss values in the progress bar
@@ -647,6 +621,9 @@ class VAEGANFineTuner:
             test_clprec_img_prc =0.0
             test_clrec_dl =0.0
             test_clrec_img_prc =0.0
+            test_total_ce_loss = 0.0
+            test_total_cldice_loss = 0.0
+
             test_progress_bar = tqdm(test_loader, desc=f"Epoch {epoch}/{epochs}")
             if test_loader:
                 print('The length of test loader',len(test_loader))
@@ -711,73 +688,74 @@ class VAEGANFineTuner:
 
                             reconstructed = self.vae.decode(z_averaged).sample
 
-                            #reconstruction_test_loss = ce_loss(reconstructed, target)
-                            test_perceptual_loss = perceptual_loss(target,reconstructed)
-                            cldice_loss = compute_cldice_loss(reconstructed,target)
-                            reconstruction_test_loss =  test_perceptual_loss
+                            test_ce_loss = ce_loss(reconstructed,target)
+                            probs       = torch.softmax(reconstructed, dim=1)
+                            member_prob = probs[:, 2:3]
+                            member_gt   = (target == 2).float().unsqueeze(1)
+                            test_cldice_loss = cldice_loss(member_prob,member_gt)
+                            reconstruction_loss =  test_ce_loss + test_cldice_loss
+                            reconstruction_test_loss =  0.3* test_ce_loss + test_cldice_loss * 0.7
                             #reconstruction_test_loss = mse_loss(reconstructed, target)
 
                             t_loss = reconstruction_test_loss
 
                             test_vae_loss += t_loss.item()
                             test_mse_loss += reconstruction_test_loss.item()
+                            test_total_ce_loss += test_ce_loss.item()
+                            test_total_cldice_loss += test_cldice_loss.item()
 
-                            predicted_binary = extract_foreground_mask(
-                                        reconstructed[i].permute(1, 2, 0).detach().cpu().numpy())
-                            # red_extracted_structures = extract_foreground_mask(predicted_structures.unsqueeze(-1).detach().cpu().numpy())
-                            gt_binary = extract_foreground_mask(
-                                target[i].permute(1, 2, 0).detach().cpu().numpy())
-                            img_prc_binary = extract_foreground_mask(
-                                avg_result[i].permute(1, 2, 0).detach().cpu().numpy())
+                            for i in range(len(reconstructed)):
 
-                            predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
-                            gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
-                            img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
+                                reconstructed = torch.argmax(reconstructed[i], dim=0)
+                                
+                                predicted_binary = (reconstructed == 2).detach().cpu().numpy().astype(np.float32)
+                                gt_binary = (target[i] == 2).detach().cpu().numpy().astype(np.float32)
+                                img_prc_binary = (avg_result[i] ==2).detach().cpu().numpy().astype(np.float32)
 
-                            cl_prec = np.sum(predicted_skeleton * gt_binary) / (
-                                    np.sum(predicted_skeleton) + 1e-7)
-                            cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
-                            cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
+                                predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
+                                gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
+                                img_prc_skeleton = skeletonize(img_prc_binary > 0).astype(np.float32)
 
-                            cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
-                            cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
-                            cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
+                                cl_prec = np.sum(predicted_skeleton * gt_binary) / (np.sum(predicted_skeleton) + 1e-7)
+                                cl_rec = np.sum(gt_skeleton * predicted_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                cl_dice_dl = 2 * cl_prec * cl_rec / (cl_prec + cl_rec)
 
-                            test_cldice_dl += cl_dice_dl
-                            test_cldice_img_prc += cl_dice_img_prc
-                            test_clprec_dl += cl_prec
-                            test_clprec_img_prc += cl_prec_i
-                            test_clrec_dl += cl_rec
-                            test_clrec_img_prc += cl_rec_i  
-                            iou_dilated, iou_dilated_image_processing, dilated_overlap, img_proc_dilated_overlap = visulaize_iou_metrics(predicted_binary, gt_binary, img_prc_binary, tolerance=0)
-                            test_iou_dl += iou_dilated
-                            test_iou_img_prc += iou_dilated_image_processing
+                                cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
+                                cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
+                                cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
 
+                                test_cldice_dl += cl_dice_dl
+                                test_cldice_img_prc += cl_dice_img_prc
+                                test_clprec_dl += cl_prec
+                                test_clprec_img_prc += cl_prec_i
+                                test_clrec_dl += cl_rec
+                                test_clrec_img_prc += cl_rec_i
+                                iou_dilated,iou_dilated_image_processing,dilated_overlap,img_proc_dilated_overlap = visulaize_iou_metrics(predicted_binary, gt_binary, img_prc_binary, tolerance=0)
+                                test_iou_dl += iou_dilated
+                                test_iou_img_prc += iou_dilated_image_processing
 
-                            #reconstructed = torch.argmax(reconstructed, dim=1)
+                                if epoch % 1 == 0:
+                                
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test'))
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}'))
+                                    if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}', 'Metrics')):
+                                        os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}','Metrics'))
 
-                            if epoch % 5 == 0:
-                                if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/test')):
-                                    os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/test'))
-                                if not os.path.exists(f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}'):
-                                    os.mkdir(f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}')
-                                if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}','Metrics')):
-                                    os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}','Metrics'))
+                                    # plt.imsave(os.path.join(f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}', f'{save_path}_{index}.png'),
+                                    #         reconstructed.detach().cpu().numpy(), cmap='gray', vmin = reconstructed.min(), vmax = reconstructed.max())
 
-                                for i in range(len(reconstructed)):
-                                    plt.imsave(os.path.join(f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}',
-                                                            f'output_images_{epoch}_{batch}_{index}.png'),
-                                               torch.clamp(reconstructed[i],0,1).permute(1, 2, 0).detach().cpu().numpy())
-
-                                    
                                     group = {
                                         'inputs': images[i].detach().cpu().numpy(),
-                                        'gt': target[i].permute(1, 2, 0).detach().cpu().numpy(),
+                                        'gt': target[i].detach().cpu().numpy(),
                                         'gt_foreground': gt_binary,
-                                        'pred': reconstructed[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                        'pred_foreground': predicted_binary,
-                                        'baseline': avg_result[i].permute(1, 2, 0).detach().cpu().numpy(),
-                                        'baseline_foreground': img_prc_binary,
+                                        'pred': reconstructed.detach().cpu().numpy(),
+                                        'pred_foreground':predicted_binary,
+                                        'baseline': avg_result[i].detach().cpu().numpy(),
+                                        'baseline_foreground':img_prc_binary,
                                         'label': f'Batch {index}',
                                         # clDice already computed above — just pass them in
                                         'cld_pred': cl_dice_dl,
@@ -786,14 +764,15 @@ class VAEGANFineTuner:
                                         'cld_base': cl_dice_img_prc,
                                         'prec_base': cl_prec_i,
                                         'rec_base': cl_rec_i,
+                                        'iou_base': test_iou_img_prc,
+                                        'iou_pred': test_iou_dl
                                     }
-                                    visualize_cldice_comparison_grid([group], epoch=epoch, batch=index, fold=fold,
-                                                                     save_path=f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}/Metrics')
+                                    visualize_cldice_comparison_grid_discrete([group], epoch=epoch, batch=index, fold=fold,save_path=f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}/Metrics')
                                     
-                                    visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i],
-                                                     avg_result[i], iou_dilated, iou_dilated_image_processing, dilated_overlap,img_proc_dilated_overlap, f'./output_images_{latent_technique}_{fold}/test/Epoch {epoch}', index, True)
-                                    
-                                    index +=1
+                                    # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed, images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
+                                    #              img_proc_dilated_overlap, f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}/Metrics', index, False)
+                                    index += 1
+
 
                             test_progress_bar.set_postfix({
                                 'Test Total loss': t_loss.item(),
@@ -821,16 +800,34 @@ class VAEGANFineTuner:
                             # print('Reconstructed',reconstructed.shape)
                             # print('Target',target.shape)
 
-                            #recon_loss = mse_loss(reconstructed, target)
-                            #recon_loss = ce_loss(reconstructed, target)
-                            recon_loss = perceptual_loss(target,reconstructed)
+                            recon_loss = ce_loss(reconstructed,target)
+                            probs       = torch.softmax(reconstructed, dim=1)
+                            member_prob = probs[:, 2:3]
+                            member_gt   = (target == 2).float().unsqueeze(1)
+                            test_cldice_loss = cldice_loss(member_prob,member_gt)
+                                
                             kl_loss = posterior.kl().mean()
-                            #ssim_loss = 1 - ssim(reconstructed, target)
-                            t_loss = recon_loss + kl_weight * kl_loss
+
+                            t_loss = recon_loss + kl_weight * kl_loss + test_cldice_loss
+
+                            if epoch%5 == 0 :
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
+                                        os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test'))
+                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}')):
+                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}'))
+                                print('The shape of the reconstructed individual image',reconstructed.shape)
+                                reconstructed = torch.argmax(reconstructed, dim=1)
+                                visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}',False)
+                        
 
                             test_vae_loss += t_loss.item()
                             test_mse_loss += recon_loss.item()
                             test_kl_loss += kl_loss.item()
+                            test_cldice_loss += test_cldice_loss.item()
                             #test_ssim_loss += ssim_loss.item()
 
                             #reconstructed = torch.argmax(reconstructed, dim=1)
@@ -858,8 +855,8 @@ class VAEGANFineTuner:
                         }, f'./finetuned_vae/checkpoint_{latent_technique}.pth')
 
                 else:
-                    torch.save(self.vae,'./finetuned_vae/VAE_individual_checkpoint_furthertrained.pth')
-                    self.vae.save_pretrained('finetuned_vae/individually_trained_models_furthertrained')
+                    torch.save(self.vae,'./finetuned_vae/VAE_individual_checkpoint_ce_cldice.pth')
+                    self.vae.save_pretrained('finetuned_vae/individually_trained_models_ce_cldice')
 
                 print(f'Model Saved with test loss {test_vae_loss / len(test_loader):.4f}')
 
@@ -867,6 +864,8 @@ class VAEGANFineTuner:
             print('Logging values to W&B...')
             run.log({'fold':fold,'epoch':epoch,
                     'Train_Total_Loss': train_vae_loss / len(train_loader), 'Test_Total_Loss': test_vae_loss / len(test_loader), 'Val Total Loss': val_vae_loss/len(val_loader),
+                    'Train CE Loss':train_total_ce_loss / len(train_loader) ,'Test CE Loss':test_total_ce_loss / len(test_loader),'Val CE Loss':val_total_ce_loss/len(val_loader),
+                    'Train Cldice Loss':train_total_cldice_loss / len(train_loader), 'Test Cldice Loss':test_total_cldice_loss / len(test_loader), 'Val Cldice Loss': val_total_cldice_loss/len(val_loader),
                     'Train cldice Img_prc': train_cldice_img_prc/len(train_loader.dataset), 'Train cldice DL': train_cldice_dl/len(train_loader.dataset),
                     'Val cldice Img_prc': val_cldice_img_prc/len(val_loader.dataset), 'Val cldice DL': val_cldice_dl /len(val_loader.dataset),
                     'Test cldice Img_prc': test_cldice_img_prc/len(test_loader.dataset), 'Test cldice DL': test_cldice_dl/len(test_loader.dataset),
@@ -876,7 +875,7 @@ class VAEGANFineTuner:
                     'Train cplrec Img_prc': train_clprec_img_prc/len(train_loader.dataset), 'Train clprec DL': train_clprec_dl/len(train_loader.dataset),
                     'Val cplrec Img_prc': val_clprec_img_prc/len(val_loader.dataset), 'Val clprec DL': val_clprec_dl /len(val_loader.dataset),
                     'Test cplrec Img_prc': test_clprec_img_prc/len(test_loader.dataset), 'Test clprec DL': test_clprec_dl/len(test_loader.dataset),
-                    'Learning Rate':decoder_optimizer.param_groups[0]['lr'],
+                    #'Learning Rate':decoder_optimizer.param_groups[0]['lr'],
                     'Train IoU Img_prc': train_iou_img_prc/len(train_loader.dataset), 'Train IoU DL': train_iou_dl/len(train_loader.dataset),
                     'Val IoU Img_prc': val_iou_img_prc/len(val_loader.dataset), 'Val IoU DL': val_iou_dl /len(val_loader.dataset),
                     'Test IoU Img_prc': test_iou_img_prc/len(test_loader.dataset), 'Test IoU DL': test_iou_dl/len(test_loader.dataset),

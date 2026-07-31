@@ -5,99 +5,94 @@ import torch.nn.functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
-class SoftSkeletonize(torch.nn.Module):
+class SoftSkeletonize(nn.Module):
+    """Differentiable morphological skeletonization (soft-clDice, Shit et al. 2021).
+    Expects a soft mask in [0, 1] of shape (B, 1, H, W)."""
 
-    def __init__(self,num_iters =5):
-        super(SoftSkeletonize,self).__init__()
+    def __init__(self, num_iters: int = 5):
+        super().__init__()
         self.num_iters = num_iters
 
-    def soft_erode(self,img):
+    def soft_erode(self, img):
+        p1 = -F.max_pool2d(-img, kernel_size=(3, 1), stride=1, padding=(1, 0))
+        p2 = -F.max_pool2d(-img, kernel_size=(1, 3), stride=1, padding=(0, 1))
+        return torch.min(p1, p2)
 
-        p1 = -F.max_pool2d(-img,kernel_size=(3,1),stride=(1,1),padding=(1,0))
-        p2 = -F.max_pool2d(-img,kernel_size=(1,3),stride=(1,1),padding=(0,1))
+    def soft_dilate(self, img):
+        return F.max_pool2d(img, kernel_size=3, stride=1, padding=1)
 
-        return torch.min(p1,p2)
-
-    def soft_dilate(self,img):
-
-        return F.max_pool2d(img,kernel_size=(3,3),stride=(1,1),padding=(1,1))
-
-    def soft_open(self,img):
-
+    def soft_open(self, img):
         return self.soft_dilate(self.soft_erode(img))
 
-    def soft_skel(self, img):
-
-        img1 = self.soft_open(img)
-        skel = F.relu(img - img1)
-
-        #Iteratively add to the existing skeleton
-        for j in range(self.num_iters):
+    def forward(self, img):
+        skel = F.relu(img - self.soft_open(img))
+        for _ in range(self.num_iters):
             img = self.soft_erode(img)
-            img1 = self.soft_open(img)
-            delta = F.relu(img - img1)
+            delta = F.relu(img - self.soft_open(img))
             skel = skel + F.relu(delta - skel * delta)
         return skel
 
-    def forward(self,img):
-        return self.soft_skel(img)
+
+def _check_mask(x, name):
+    """Guard against every representation bug this pipeline has produced so far."""
+    assert x.dim() == 4 and x.shape[1] == 1, \
+        f"{name}: expected (B,1,H,W), got {tuple(x.shape)}"
+    assert x.numel() > 0, \
+        f"{name}: empty tensor — channel selected twice? shape {tuple(x.shape)}"
+    assert x.min() >= 0.0 and x.max() <= 1.0, \
+        f"{name}: values in [{x.min():.3f}, {x.max():.3f}] — expected [0,1] probabilities, got logits?"
 
 
-def dice_coeff(reconstructed, target):
+def soft_dice(member_prob, member_gt, smooth=1e-6):
+    """Soft Dice COEFFICIENT (higher = better), computed per sample and averaged.
 
-    # reconstructed_softmax = torch.softmax(reconstructed,dim=1)
-    # print(reconstructed_softmax.shape)
-    # reconstructed_white_areas = reconstructed_softmax[:,2]
-    reconstructed_white_areas = reconstructed
-    # cv2.imshow('White Structures',reconstructed_white_areas[0].unsqueeze(dim=-1).detach().cpu().numpy())
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
-    target_white_areas = (target==2).float()
-    # cv2.imshow('Target White Structures', target_white_areas[0].unsqueeze(dim=-1).detach().cpu().numpy())
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
-    intersection = (reconstructed_white_areas * target_white_areas).sum(dim =(1,2))
-    #print('Intersection: ', intersection)
-    union = (reconstructed_white_areas + target_white_areas).sum(dim =(1,2))
-    smooth = 1e-6
-    dice = 1 - ((2 * intersection + smooth) / (union + smooth)).mean()
-    return dice
+    member_prob: (B,1,H,W) float in [0,1] — probs[:, 2:3] from the trainer
+    member_gt:   (B,1,H,W) float {0,1}    — (target_label == 2).float().unsqueeze(1)
+    """
+    _check_mask(member_prob, "member_prob")
+    _check_mask(member_gt, "member_gt")
+    assert member_prob.shape == member_gt.shape
+
+    print('The shape of member gt', member_gt.shape)
+    print('The shape of member prob', member_prob.shape)
+
+    intersection = (member_prob * member_gt).sum(dim=(1, 2, 3))
+    denom        = (member_prob + member_gt).sum(dim=(1, 2, 3))
+    return ((2.0 * intersection + smooth) / (denom + smooth)).mean()
+
 
 class soft_dice_cldice(nn.Module):
-    def __init__(self, iter_=3, alpha=0.5, smooth = 1., exclude_background=True):
-        super(soft_dice_cldice, self).__init__()
-        self.iter = iter_
-        self.smooth = smooth
+    """Combined soft Dice + soft clDice LOSS (lower = better).
+
+    loss = (1 - alpha) * (1 - Dice) + alpha * (1 - clDice)
+
+    Both inputs are single-channel soft masks of the structural-member class.
+    All channel selection, softmax, and class-index logic lives in the trainer:
+
+        probs       = torch.softmax(logits, dim=1)              # the ONE softmax
+        member_prob = probs[:, 2:3]                             # class 2 = member
+        member_gt   = (target_label == 2).float().unsqueeze(1)
+        loss        = criterion(member_prob, member_gt)
+    """
+
+    def __init__(self, alpha: float = 0.5, skel_iters: int = 5, smooth: float = 1.0):
+        super().__init__()
         self.alpha = alpha
-        self.soft_skeletonize = SoftSkeletonize(num_iters=5)
-        self.exclude_background = exclude_background
+        self.smooth = smooth
+        self.soft_skeletonize = SoftSkeletonize(num_iters=skel_iters)
 
-    def forward(self, y_true, y_pred):
-        if self.exclude_background:
-            y_true = y_true
-            y_pred = y_pred
-            print(y_pred)
-        dice = dice_coeff(y_true, y_pred)
-        skel_pred = self.soft_skeletonize(y_pred)
-        # cv2.imshow('Pred',skel_pred)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
-        skel_true = self.soft_skeletonize(y_true)
-        # cv2.imshow('True', skel_true)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
-        # fig, ax = plt.subplots(1,2,figsize=(10,5))
+    def forward(self, member_prob, member_gt):
+        _check_mask(member_prob, "member_prob")
+        _check_mask(member_gt, "member_gt")
+        assert member_prob.shape == member_gt.shape
 
-        # ax[0].imshow(skel_true[0].permute(1,2,0).detach().cpu().numpy())
-        # ax[0].axis('off')
+        dice_loss = 1.0 - soft_dice(member_prob, member_gt)
 
-        # ax[1].imshow(skel_pred[0].permute(1,2,0).detach().cpu().numpy())
-        # ax[1].axis('off')
-        # plt.savefig(f'./Skeletons_gt/skeleton_{index}.png',)
-        # plt.close()
-        # plt.show()
-        tprec = (torch.sum(torch.multiply(skel_pred, y_true))+self.smooth)/(torch.sum(skel_pred)+self.smooth)
-        tsens = (torch.sum(torch.multiply(skel_true, y_pred))+self.smooth)/(torch.sum(skel_true)+self.smooth)
-        cl_dice = 1.- 2.0*(tprec*tsens)/(tprec+tsens)
-        return (1.0-self.alpha)*dice+self.alpha*cl_dice
+        skel_pred = self.soft_skeletonize(member_prob)
+        skel_true = self.soft_skeletonize(member_gt)
 
+        tprec = (torch.sum(skel_pred * member_gt) + self.smooth) / (torch.sum(skel_pred) + self.smooth)
+        tsens = (torch.sum(skel_true * member_prob) + self.smooth) / (torch.sum(skel_true) + self.smooth)
+        cldice_loss = 1.0 - 2.0 * (tprec * tsens) / (tprec + tsens)
+
+        return (1.0 - self.alpha) * dice_loss + self.alpha * cldice_loss

@@ -21,26 +21,26 @@ def downsample_div8(a, m=8):
     t = F.pad(t, (pw//2, pw-pw//2, ph//2, ph-ph//2), value=127)         # 0 = void, reach multiple of m
     return t.squeeze(0).permute(1,2,0).numpy()
 
-# main_dir = 'data/Bigger Batches of Data_original_size'
-# for batches in os.listdir(main_dir):
-#     for subbatch in os.listdir(os.path.join(main_dir, batches)):
-#         for imagepath in os.listdir(os.path.join(main_dir, batches,subbatch)):
-#             image = cv2.imread(os.path.join(main_dir,batches,subbatch,imagepath))
-#             print(os.path.join(main_dir,batches,imagepath))
-#             print(image.shape)
-#             resized_image = downsample_div8(image) /255.0
-#             print(np.unique(resized_image,return_counts=True))
-#             if not os.path.isdir(f'data/Batches/{batches}'):
-#                 os.mkdir(f'data/Batches/{batches}')
-#             if not os.path.isdir(f'data/Batches/{batches}/{subbatch}'):
-#                 os.mkdir(f'data/Batches/{batches}/{subbatch}')
-#             plt.imsave(os.path.join(f'data/Batches/{batches}/{subbatch}',imagepath), resized_image)
-#             plt.close()
+main_dir = 'data/Consensus_data/subbatches'
+for batches in os.listdir(main_dir):
+    #for subbatch in os.listdir(os.path.join(main_dir, batches)):
+        for imagepath in os.listdir(os.path.join(main_dir, batches)):
+            image = cv2.imread(os.path.join(main_dir,batches,imagepath))
+            print(os.path.join(main_dir,batches,imagepath))
+            #print(image.shape)
+            resized_image = downsample_div8(image) /255.0
+            print(np.unique(resized_image,return_counts=True))
+            if not os.path.isdir(f'data/Consensus_data/subbatches_resized/{batches}'):
+                os.mkdir(f'data/Consensus_data/subbatches_resized/{batches}')
+            # if not os.path.isdir(f'data/Batches/{batches}/{subbatch}'):
+            #     os.mkdir(f'data/Batches/{batches}/{subbatch}')
+            plt.imsave(os.path.join(f'data/Consensus_data/subbatches_resized/{batches}',imagepath), resized_image)
+            plt.close()
 
-main_dir = 'data/Image Processing Original Size Grayscale'
-for imagepath in os.listdir(main_dir):
-    image = cv2.imread(main_dir+'/'+imagepath)
-    resized_image = downsample_div8(image) / 255.0
-    print(np.unique(resized_image, return_counts=True))
-    plt.imsave(os.path.join(f'data/Image Processing Results', imagepath), resized_image)
-    plt.close()
+# main_dir = 'data/Consensus_data/image_proc'
+# for imagepath in os.listdir(main_dir):
+#     image = cv2.imread(main_dir+'/'+imagepath)
+#     resized_image = downsample_div8(image) / 255.0
+#     print(np.unique(resized_image, return_counts=True))
+#     plt.imsave(os.path.join(f'data/Consensus_data/image_proc_resized', imagepath), resized_image)
+#     plt.close()

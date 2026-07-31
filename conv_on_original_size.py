@@ -7,6 +7,7 @@ import wandb
 from torch.utils.data import DataLoader,Subset
 from torchinfo import summary
 import cv2
+#from input_pipeline_discrete import *
 from input_pipeline import *
 import matplotlib
 matplotlib.use('Agg')
@@ -15,10 +16,10 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.morphology import binary_dilation
 from skimage.morphology import skeletonize
 from scipy.ndimage import distance_transform_edt
-#import gudhi
 from cldice_loss import *
 from metrics import compute_betti_numbers
 import collections
+from torch.utils.data import ConcatDataset
 from thesis_visualisation import *
 
 
@@ -53,8 +54,8 @@ class simple_Conv(nn.Module):
         x7 = self.relu_layer(self.conv_layer7(x5))
         x8 = self.relu_layer(self.conv_layer8(x7))
         conv_output = self.output_layer(x8)
-        #output = conv_output
-        output = alpha * conv_output + avg_output
+        output = conv_output
+        #output = alpha * conv_output + avg_output
 
         #sdf_output = self.sdf_head(x5)
         return output
@@ -82,6 +83,8 @@ def train_grayscale():
 
     batch_size=1
 
+    single_image_reconstruction = False
+
     data_dir = 'data/Bigger Batches of Data_original_size'
     ground_truth_dir = 'data/Edited Ground Truth_ Encoded'
     image_processing_dir = 'data/Image Processing Original Size Grayscale'
@@ -107,36 +110,45 @@ def train_grayscale():
         val_dataset = TopoDatasetImg(items,val_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir, augment=False)
         test_dataset = TopoDatasetImg(items,test_idx,ground_truth_dir= ground_truth_dir, img_proc_dir = image_processing_dir,augment=False)
 
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        opento_dataset_dir = create_image_groups('data/Consensus Dataset/subbatches')
+        opento_gt_dir = 'data/Consensus Dataset/ground_truth'
+        opento_img_prc_dir = 'data/Consensus Dataset/image_proc' 
+        openTO_train_dataset = OpenTOConsensusDatasetdisc(opento_dataset_dir,opento_gt_dir,opento_img_prc_dir, augment = True)
+
+        train_combined = ConcatDataset([train_dataset, openTO_train_dataset])
+        
+        
+        train_dataloader = DataLoader(train_combined, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
         val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,num_workers=4,pin_memory=True)
         test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,num_workers=4,pin_memory=True)
 
         lr = 0.001
-        epochs = 300
+        epochs = 250
 
         optimizer1 = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay = 1e-3)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=300)
         #scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer1,gamma= 0.95)
 
-        weights = torch.tensor([0.25, 0.35, 0.5])
-        crossentropy_loss = torch.nn.CrossEntropyLoss(weight=weights).to(device)
+        #weights = torch.tensor([0.25, 0.35, 0.5])
+        #crossentropy_loss = torch.nn.CrossEntropyLoss(weight=weights).to(device)
+        crossentropy_loss = torch.nn.CrossEntropyLoss().to(device)
         cl_dice = soft_dice_cldice()
 
-        save_parent_dir = f'Residual Convolutional Network Results_original size_{fold}'
+        save_parent_dir = f'Residual Convolutional Network Results_original size_wOpenTOData{fold}'
         best_loss = float('inf')
 
         run = wandb.init(
             # Set the wandb entity where your project will be logged (generally your team name).
             entity="veenasridhar96-university-of-stuttgart",
-            # Set the wandb project where this run will be logged.
-            # project=self.PROJECT_NAME,
-            # group=self.GROUP_NAME,
-            name='Topology Optimization',
-            # job_type= f'run- {fold}',
-            # Track hyperparameters and run metadata.
+            name='CNN Topology Optimization (No Residual Config)',
             config={
                 "learning_rate": lr,
                 "epochs": epochs,
+                "loss": 'CE+CLDice',
+                "architecture": "CNN",
+                "dataset": "OpenTO + TO",
+                "epochs": epochs,
+                "fold": fold,
             }, )
         #wandb.define_metric("*", step_metric="epoch")
 
@@ -187,10 +199,10 @@ def train_grayscale():
 
                 cross_entropy_loss = crossentropy_loss(output_logits, labels)
                 #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                dice_loss = cl_dice(targets_onehot,output_softmax,train_batch)
-                img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),train_batch)
+                dice_loss = cl_dice(targets_onehot,output_softmax)
+                img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float())
                 
-                loss = cross_entropy_loss +dice_loss
+                loss = 0.3* cross_entropy_loss + 0.7* dice_loss
                 train_img_proc_dice_loss += img_processing_dice_loss.item()
                 train_dice_loss += dice_loss.item()
 
@@ -206,7 +218,12 @@ def train_grayscale():
 
                 train_loss += loss.item()
 
+
                 if epoch % 10 ==0:
+                    if not os.path.exists(os.path.join(save_parent_dir)):
+                        os.mkdir(os.path.join(save_parent_dir))
+                    if not os.path.exists(os.path.join(save_parent_dir,'train')):
+                        os.mkdir(os.path.join(save_parent_dir,'train'))
                     if not os.path.exists(os.path.join(save_parent_dir,'train', 'Epoch '+str(epoch))):
                         os.mkdir(os.path.join(save_parent_dir,'train', 'Epoch '+str(epoch)))
                     if not os.path.exists(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'IoU Metric')):
@@ -218,8 +235,8 @@ def train_grayscale():
                         #print('Unique Outputs',output.unique(return_counts=True), 'Unique Labels',labels.unique(return_counts=True))
                         # plt.imsave(f'{save_parent_dir}/train/Epoch {epoch}/label_{train_batch}.png', labels[i].cpu().detach().numpy(),cmap='gray',vmin=0,vmax=2)
                         # plt.close()
-                        plt.imsave(f'{save_parent_dir}/train/Epoch {epoch}/result_{train_batch}.png',output[i].detach().cpu().numpy(),cmap='gray',vmin=0,vmax=2)
-                        plt.close()
+                        # plt.imsave(f'{save_parent_dir}/train/Epoch {epoch}/result_{train_batch}.png',output[i].detach().cpu().numpy(),cmap='gray',vmin=0,vmax=2)
+                        # plt.close()
                         
                         predicted_binary = (output[i].detach().cpu().numpy() == 2).astype(np.float32)
                         gt_binary = (labels[i].detach().cpu().numpy() == 2).astype(np.float32)
@@ -235,14 +252,6 @@ def train_grayscale():
                         cl_prec_i = np.sum(img_prc_skeleton * gt_binary) / (np.sum(img_prc_skeleton) + 1e-7)
                         cl_rec_i = np.sum(gt_skeleton * img_prc_binary) / (np.sum(gt_skeleton) + 1e-7)
                         cl_dice_img_prc = 2 * cl_prec_i * cl_rec_i / (cl_prec_i + cl_rec_i)
-                        
-                        # b0_pred, b1_pred = compute_betti_numbers(output[i])
-                        # b0_img_prc, b1_img_prc = compute_betti_numbers(avg_output[i].squeeze(0))
-                        # b0_gt, b1_gt = compute_betti_numbers(labels[i])
-                        # betti_error_pred = abs(b0_pred - b0_gt) + abs(b1_pred - b1_gt)
-                        # betti_error_img_prc = abs(b0_img_prc - b0_gt) + abs(b1_img_prc - b1_gt)
-                        # iou, img_prc_iou = visulaize_iou_metrics(raw_images=images[i], epoch=epoch, batch=train_batch,
-                        #                                          predicted_structures=output[i],gt = labels[i],image_processing_result=avg_output[i],betti_error_pred=cl_dice_dl,betti_error_img_prc=cl_dice_img_prc,save_path= f'{save_parent_dir}/train')
 
                         # dl_sdf, normalised_dl_sdf= sdf_distance_function(output[i].detach().cpu().numpy())
                         # img_prc_sdf,normalised_img_prc_sdf = sdf_distance_function(avg_output[i].squeeze(0).detach().cpu().numpy())
@@ -252,48 +261,44 @@ def train_grayscale():
                         # print(dl_sdf_mse.shape)
                         
                         iou,img_prc_iou =  visulaize_iou_metrics(raw_images=images[i], epoch=epoch, batch=train_batch, predicted_structures = output[i],
-                                                                 gt = labels[i],image_processing_result=avg_output[i],betti_error_pred=cl_dice_dl,betti_error_img_prc=cl_dice_img_prc,save_path= f'{save_parent_dir}/train')
-                        group = {
-                            'inputs': images[i],
-                            'gt': labels[i].detach().cpu().numpy(),
-                            'pred': output[i].detach().cpu().numpy(),
-                            'baseline': avg_output[i].squeeze(0).detach().cpu().numpy(),
-                            'label': f'Batch {train_batch}',
-                            # clDice already computed above — just pass them in
-                            'cld_pred': cl_dice_dl,
-                            'prec_pred': cl_prec,
-                            'rec_pred': cl_rec,
-                            'cld_base': cl_dice_img_prc,
-                            'prec_base': cl_prec_i,
-                            'rec_base': cl_rec_i,
-                        }
-                        visualize_comparison_with_overlay(
-                            groups=[group],
-                            structure_val=2,  # your label index for structure class
-                            save_path=f'{save_parent_dir}/train/Epoch {epoch}/IoU Metric',
-                            batch=train_batch
-                        )
-                        plot2_overlay(labels[i].detach().cpu().numpy(),output[i].detach().cpu().numpy(),avg_output[i].squeeze(0).detach().cpu().numpy(),(cl_dice_dl,cl_prec,cl_rec),
-                                      (cl_dice_img_prc,cl_prec_i,cl_rec_i),save_path=f'{save_parent_dir}/train/Epoch {epoch}/IoU Metric',batch = train_batch)
+                                                                  gt = labels[i],image_processing_result=avg_output[i],betti_error_pred=cl_dice_dl,betti_error_img_prc=cl_dice_img_prc,save_path= f'{save_parent_dir}/train')
+                        if i <10:
+                            group = {
+                                'inputs': images[i],
+                                'gt': labels[i].detach().cpu().numpy(),
+                                'pred': output[i].detach().cpu().numpy(),
+                                'baseline': avg_output[i].squeeze(0).detach().cpu().numpy(),
+                                'label': f'Batch {train_batch}',
+                                # clDice already computed above — just pass them in
+                                'cld_pred': cl_dice_dl,
+                                'prec_pred': cl_prec,
+                                'rec_pred': cl_rec,
+                                'cld_base': cl_dice_img_prc,
+                                'prec_base': cl_prec_i,
+                                'rec_base': cl_rec_i,
+                                'iou_dl':iou,
+                                'iou_img_prc': img_prc_iou
+                            }
+                            visualize_comparison_with_overlay(
+                                groups=[group],
+                                structure_val=2,  # your label index for structure class
+                                save_path=f'{save_parent_dir}/train/Epoch {epoch}/IoU Metric',
+                                batch=train_batch
+                            )
+                        # plot2_overlay(labels[i].detach().cpu().numpy(),output[i].detach().cpu().numpy(),avg_output[i].squeeze(0).detach().cpu().numpy(),(cl_dice_dl,cl_prec,cl_rec),
+                        #               (cl_dice_img_prc,cl_prec_i,cl_rec_i),save_path=f'{save_parent_dir}/train/Epoch {epoch}/IoU Metric',batch = train_batch)
                         
                         train_iou_dl += iou
                         train_iou_img_prc += img_prc_iou
                         train_cl_dice_image_prc += cl_dice_img_prc
                         train_cl_dice_dl += cl_dice_dl
-                        # sdf_vis = sdf_pred[i].permute(1, 2, 0).detach().cpu().numpy()
-                        # # vmax = max(abs(sdf_vis.min()), abs(sdf_vis.max()))
-                        # fig, ax = plt.subplots(figsize=(6, 5))
-                        # im = ax.imshow(sdf_vis, cmap='RdBu', vmin=-1, vmax=1)
-                        # cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                        # plt.savefig(os.path.join(save_parent_dir, 'train', 'Epoch ' + str(epoch), 'sdf_map',
-                        #                          f'sdf_{train_batch}'))
-                        # plt.close(fig)
+                        
                         train_batch += 1
 
             scheduler.step()
             print(f'Train Loss for Epoch {epoch}', train_loss / len(train_dataloader))
-            print('Train IoU for deep learning', train_iou_dl / len(train_idx))
-            print('Train IoU for image processing ', train_iou_img_prc / len(train_idx))
+            # print('Train IoU for deep learning', train_iou_dl / len(train_idx))
+            # print('Train IoU for image processing ', train_iou_img_prc / len(train_idx))
 
             # Starting a val loop
             if epoch % 10 == 0:
@@ -328,17 +333,15 @@ def train_grayscale():
                         targets_onehot = F.one_hot(labels, num_classes=3)  # (B, H, W, C)
                         targets_onehot = targets_onehot.permute(0, 3, 1, 2)  # (B, C, H, W)
                         targets_onehot = targets_onehot.float()
-                        # print('One Hot Targets', targets_onehot.shape, 'Unique Values',
-                        #      targets_onehot.unique(return_counts=True))
 
                         
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                        dice_loss = cl_dice(targets_onehot,output_softmax,val_batch)
-                        img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),val_batch)
+                        dice_loss = cl_dice(targets_onehot,output_softmax)
+                        img_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float())
                         
-                        loss = cross_entropy_loss + dice_loss
+                        loss = 0.3* cross_entropy_loss + 0.7* dice_loss
 
                         val_img_proc_dice_loss += img_processing_dice_loss
                         # val_cross_entropy_loss += cross_entropy_loss.item()
@@ -347,6 +350,8 @@ def train_grayscale():
                         val_loss += loss.item()
 
                         # if epoch % 10 == 0:
+                        if not os.path.exists(os.path.join(save_parent_dir,'val')):
+                            os.mkdir(os.path.join(save_parent_dir,'val'))
                         if not os.path.exists(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch))):
                             os.mkdir(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch)))
                         if not os.path.exists(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'sdf_map')):
@@ -355,10 +360,10 @@ def train_grayscale():
                                 os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'IoU Metric')):
                             os.mkdir(os.path.join(save_parent_dir, 'val', 'Epoch ' + str(epoch), 'IoU Metric'))
                         for i in range(len(output)):
-                            plt.axis('off')
-                            plt.imsave(f'{save_parent_dir}/val/Epoch {epoch}/result_{val_batch}.png',
-                                       output[i].detach().cpu().numpy(), cmap='gray', vmin=0, vmax=2)
-                            plt.close()
+                            # plt.axis('off')
+                            # plt.imsave(f'{save_parent_dir}/val/Epoch {epoch}/result_{val_batch}.png',
+                            #            output[i].detach().cpu().numpy(), cmap='gray', vmin=0, vmax=2)
+                            # plt.close()
                             
                             predicted_binary = (output[i].detach().cpu().numpy() == 2).astype(np.float32)
                             gt_binary = (labels[i].detach().cpu().numpy() == 2).astype(np.float32)
@@ -405,6 +410,8 @@ def train_grayscale():
                                 'cld_base': cl_dice_img_prc,
                                 'prec_base': cl_prec_i,
                                 'rec_base': cl_rec_i,
+                                'iou_dl':iou_dl,
+                                'iou_img_prc': iou_img_prc,
                             }
                             visualize_comparison_with_overlay(
                                 groups=[group],
@@ -412,12 +419,12 @@ def train_grayscale():
                                 save_path=f'{save_parent_dir}/val/Epoch {epoch}/IoU Metric',
                                 batch=val_batch
                             )
-                            plot2_overlay(labels[i].detach().cpu().numpy(), output[i].detach().cpu().numpy(),
-                                          avg_output[i].squeeze(0).detach().cpu().numpy(),
-                                          (cl_dice_dl, cl_prec, cl_rec),
-                                          (cl_dice_img_prc, cl_prec_i, cl_rec_i),
-                                          save_path=f'{save_parent_dir}/val/Epoch {epoch}/IoU Metric',
-                                          batch=val_batch)
+                            # plot2_overlay(labels[i].detach().cpu().numpy(), output[i].detach().cpu().numpy(),
+                            #               avg_output[i].squeeze(0).detach().cpu().numpy(),
+                            #               (cl_dice_dl, cl_prec, cl_rec),
+                            #               (cl_dice_img_prc, cl_prec_i, cl_rec_i),
+                            #               save_path=f'{save_parent_dir}/val/Epoch {epoch}/IoU Metric',
+                            #               batch=val_batch)
                             val_iou_dl += iou_dl
                             val_iou_img_prc += iou_img_prc
                             val_cl_dice_image_prc +=cl_dice_img_prc
@@ -434,8 +441,8 @@ def train_grayscale():
                             val_batch += 1
 
             print(f'Val Loss for Epoch {epoch}', val_loss / len(val_dataloader))
-            print('Val IoU for deep learning', val_iou_dl / len(val_idx))
-            print('Val IoU for image processing ', val_iou_img_prc / len(val_idx))
+            # print('Val IoU for deep learning', val_iou_dl / len(val_idx))
+            # print('Val IoU for image processing ', val_iou_img_prc / len(val_idx))
 
             # Starting a test loop
             if epoch % 10 == 0:
@@ -480,11 +487,11 @@ def train_grayscale():
                         cross_entropy_loss = crossentropy_loss(output_logits, labels)
 
                         #sdf_loss = F.l1_loss(sdf_pred, gt_sdf)
-                        dice_loss = cl_dice(targets_onehot,output_softmax,test_batch)
-                        image_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float(),test_batch)
+                        dice_loss = cl_dice(targets_onehot,output_softmax)
+                        image_processing_dice_loss = cl_dice(targets_onehot,avg_output_one_hot.float())
                         # boundary_loss = sdf_loss(output_softmax, gt_sdf_white)
                         # loss = cross_entropy_loss + sdf_loss
-                        loss = cross_entropy_loss + dice_loss
+                        loss = 0.3* cross_entropy_loss + 0.7* dice_loss
                         test_image_processing_dice_loss += image_processing_dice_loss
                         # test_cross_entropy_loss += cross_entropy_loss.item()
                         #test_sdf_loss += sdf_loss.item()
@@ -492,6 +499,8 @@ def train_grayscale():
                         test_loss += loss.item()
 
                         # if epoch %10 == 0:
+                        if not os.path.exists(os.path.join(save_parent_dir,'test')):
+                            os.mkdir(os.path.join(save_parent_dir,'test'))
                         if not os.path.exists(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch))):
                             os.mkdir(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch)))
                         if not os.path.exists(os.path.join(save_parent_dir, 'test', 'Epoch ' + str(epoch), 'sdf_map')):
@@ -530,6 +539,15 @@ def train_grayscale():
                             # gt_sdf = sdf_distance_function(labels[i].detach().cpu().numpy())
                             # dl_sdf_mse = np.mean((dl_sdf - gt_sdf) ** 2)
                             # img_prc_sdf_mse = np.mean((img_prc_sdf - gt_sdf) ** 2)
+
+                            iou_dl, iou_img_prc = visulaize_iou_metrics(raw_images=images[i], epoch=epoch,
+                                                                         batch=test_batch,
+                                                                         predicted_structures=output[i],
+                                                                         gt=labels[i],
+                                                                         image_processing_result=avg_output[i],
+                                                                         betti_error_pred=cl_dice_dl,
+                                                                         betti_error_img_prc=cl_dice_img_prc,
+                                                                         save_path=f'{save_parent_dir}/val')
                             group = {
                                 'inputs': images[i],
                                 'gt': labels[i].detach().cpu().numpy(),
@@ -543,6 +561,8 @@ def train_grayscale():
                                 'cld_base': cl_dice_img_prc,
                                 'prec_base': cl_prec_i,
                                 'rec_base': cl_rec_i,
+                                'iou_dl':iou_dl,
+                                'iou_img_prc': iou_img_prc,
                             }
                             visualize_comparison_with_overlay(
                                 groups=[group],
@@ -550,19 +570,19 @@ def train_grayscale():
                                 save_path=f'{save_parent_dir}/test/Epoch {epoch}/IoU Metric',
                                 batch=test_batch
                             )
-                            plot2_overlay(labels[i].detach().cpu().numpy(), output[i].detach().cpu().numpy(),
-                                          avg_output[i].squeeze(0).detach().cpu().numpy(),
-                                          (cl_dice_dl, cl_prec, cl_rec),
-                                          (cl_dice_img_prc, cl_prec_i, cl_rec_i),
-                                          save_path=f'{save_parent_dir}/test/Epoch {epoch}/IoU Metric',
-                                          batch=test_batch)
-                            iou_dl, iou_img_prc = visulaize_iou_metrics(raw_images=images[i], epoch=epoch,
-                                                                        batch=test_batch,
-                                                                        predicted_structures=output[i], gt=labels[i],
-                                                                        image_processing_result=avg_output[i],
-                                                                        betti_error_pred=cl_dice_dl,
-                                                                        betti_error_img_prc=cl_dice_img_prc,
-                                                                        save_path=f'{save_parent_dir}/test')
+                            # plot2_overlay(labels[i].detach().cpu().numpy(), output[i].detach().cpu().numpy(),
+                            #               avg_output[i].squeeze(0).detach().cpu().numpy(),
+                            #               (cl_dice_dl, cl_prec, cl_rec),
+                            #               (cl_dice_img_prc, cl_prec_i, cl_rec_i),
+                            #               save_path=f'{save_parent_dir}/test/Epoch {epoch}/IoU Metric',
+                            #               batch=test_batch)
+                            # iou_dl, iou_img_prc = visulaize_iou_metrics(raw_images=images[i], epoch=epoch,
+                            #                                             batch=test_batch,
+                            #                                             predicted_structures=output[i], gt=labels[i],
+                            #                                             image_processing_result=avg_output[i],
+                            #                                             betti_error_pred=cl_dice_dl,
+                            #                                             betti_error_img_prc=cl_dice_img_prc,
+                            #                                             save_path=f'{save_parent_dir}/test')
                             test_iou_dl += iou_dl
                             test_iou_img_prc += iou_img_prc
                             test_cl_dice_dl += cl_dice_dl
@@ -578,8 +598,8 @@ def train_grayscale():
                             test_batch += 1
 
                 print(f'Test Loss for Epoch {epoch}', test_loss / len(test_dataloader))
-                print('Test IoU for deep learning', test_iou_dl / len(test_idx))
-                print('Test IoU for image processing ', test_iou_img_prc / len(test_idx))
+                # print('Test IoU for deep learning', test_iou_dl / len(test_idx))
+                # print('Test IoU for image processing ', test_iou_img_prc / len(test_idx))
 
                 if test_loss / len(test_dataloader) < best_loss:
                     best_loss = test_loss / len(test_dataloader)
@@ -588,35 +608,36 @@ def train_grayscale():
 
                 run.log({'epoch': epoch,
                         'alpha': alpha,
+                        'fold': fold,
                         # 'learning_rate': scheduler.get_last_lr()[0],
                         'Train_Total_Loss': train_loss / len(train_dataloader),
                         'Test_Total_Loss': test_loss / len(test_dataloader),
                         'Val Loss': val_loss / len(val_dataloader),
                         # 'Train_CE_Loss': train_cross_entropy_loss / len(train_dataloader),'Test_CE_Loss': test_cross_entropy_loss / len(test_dataloader),
-                        'Train IoU': train_iou_dl / len(train_idx),
-                        'Train IoU_img': train_iou_img_prc / len(train_idx),
-                        'Test IoU': test_iou_dl / len(test_idx),
-                        'Test IoU_img': test_iou_img_prc / len(test_idx),
-                        'Val IoU': val_iou_dl / len(val_idx), 'Val IoU img': val_iou_img_prc / len(val_idx),
+                        'Train IoU': train_iou_dl / len(train_dataloader.dataset),
+                        'Train IoU_img': train_iou_img_prc / len(train_dataloader.dataset),
+                        'Test IoU': test_iou_dl / len(test_dataloader.dataset),
+                        'Test IoU_img': test_iou_img_prc /len(test_dataloader.dataset),
+                        'Val IoU': val_iou_dl / len(val_dataloader.dataset), 'Val IoU img': val_iou_img_prc / len(val_dataloader.dataset),
                         'Train_Img_Processing_Dice Loss': train_img_proc_dice_loss/len(train_dataloader),
                         'Val_Img_Proccessing_Dice Loss': val_img_proc_dice_loss/len(val_dataloader),
                         'Test_Img_Processing_Dice Loss': test_image_processing_dice_loss/len(test_dataloader),
                         'Train Dice Loss': train_dice_loss / len(train_dataloader), 'Test_Dice_Loss': test_dice_loss / len(test_dataloader),
                         'Val Dice Loss': val_dice_loss/len(val_dataloader),
 
-                        'Train_Img_Processing_Cldice': train_cl_dice_image_prc / len(train_idx),
-                        'Val_Img_Proccessing_Cldice': val_cl_dice_image_prc / len(val_idx),
-                        'Test_Img_Processing_Cldice': test_cl_dice_img_proc / len(test_idx),
-                        'Train Cldice DL': train_cl_dice_dl / len(train_idx),
-                        'Test Cldice DL': test_cl_dice_dl / len(test_idx),
-                        'Val Cldice DL': val_cl_dice_dl / len(val_idx),
+                        'Train_Img_Processing_Cldice': train_cl_dice_image_prc / len(train_dataloader.dataset),
+                        'Val_Img_Proccessing_Cldice': val_cl_dice_image_prc / len(val_dataloader.dataset),
+                        'Test_Img_Processing_Cldice': test_cl_dice_img_proc / len(test_dataloader.dataset),
+                        'Train Cldice DL': train_cl_dice_dl / len(train_dataloader.dataset),
+                        'Test Cldice DL': test_cl_dice_dl / len(test_dataloader.dataset),
+                        'Val Cldice DL': val_cl_dice_dl / len(val_dataloader.dataset),
                         })
 
         wandb.finish()
 
 def extract_red_mask(image):
     #print(image.min(),image.max())
-    R = image[:,:,0]
+    R = image
     # G = image[:,:,1]
     # B = image[:,:,2]
     mask = (R ==2)
@@ -635,9 +656,12 @@ def convert_labels(input):
 def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image_processing_result,betti_error_pred,betti_error_img_prc,tolerance=0,save_path='Simple_Conv_Grayscale_output'):
 
 
-    red_extracted_structures = extract_red_mask(predicted_structures.unsqueeze(dim = -1).detach().cpu().numpy())
-    red_gt_structures = extract_red_mask(gt.unsqueeze(dim = -1).detach().cpu().numpy())
-    red_image_processing_structures = extract_red_mask(image_processing_result.permute(1,2,0).detach().cpu().numpy())
+    print('The unique of predicted structures',predicted_structures.shape)
+    print('The unique of gt',gt.shape)
+    print('The shpe of image processing result',image_processing_result.shape)
+    red_extracted_structures = extract_red_mask(predicted_structures.detach().cpu().numpy())
+    red_gt_structures = extract_red_mask(gt.detach().cpu().numpy())
+    red_image_processing_structures = extract_red_mask(image_processing_result.detach().cpu().numpy())
 
     if tolerance>0:
         r = tolerance
@@ -677,7 +701,7 @@ def visulaize_iou_metrics(raw_images, epoch,batch,predicted_structures, gt,image
     print('Predicted IoU ', iou_dilated)
     print('Image Processing IoU ',iou_dilated_image_processing)
 
-    visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,dilated_overlap,red_image_processing_structures,img_proc_dilated_overlap,iou_dilated,iou_dilated_image_processing,betti_error_pred,betti_error_img_prc,save_path)
+    #visulaize_iou_results(raw_images,epoch,batch,predicted_structures,gt,dilated_overlap,red_image_processing_structures,img_proc_dilated_overlap,iou_dilated,iou_dilated_image_processing,betti_error_pred,betti_error_img_prc,save_path)
 
     return iou_dilated,iou_dilated_image_processing
 
@@ -862,109 +886,6 @@ def visualize_sdf_training(model, diff_model, dataloader, device,
             plt.close()
             #print(f'Saved sdf_epoch_{epoch:04d}.png')
             break   # only first batch
-
-
-
-
-
-def visulaise_sdf_images(normalised_dl_sdf, normalised_img_prc_sdf, normlaised_gt_sdf):
-    fig, axes = plt.subplots(1, 3, figsize=(14, 8))
-    #fig.suptitle('SDF Step by Step', fontsize=14)
-
-    # 1. Label map
-    # axes[0, 0].imshow(label_map, cmap='gray', vmin=0, vmax=2)
-    # axes[0, 0].set_title('Label map\n(0=black, 1=gray, 2=white)')
-    # axes[0, 0].axis('off')
-    #
-    # # 2. Binary mask
-    # axes[0, 1].imshow(mask, cmap='gray')
-    # axes[0, 1].set_title('Binary mask\n(white class only)')
-    # axes[0, 1].axis('off')
-    #
-    # # 3. dist_inside
-    # im = axes[0, 2].imshow(dist_in, cmap='hot')
-    # axes[0, 2].set_title('dist_inside\n(0 outside, +d inside)')
-    # axes[0, 2].axis('off')
-    # plt.colorbar(im, ax=axes[0, 2], fraction=0.046)
-    #
-    # # 4. dist_outside
-    # im = axes[1, 0].imshow(dist_out, cmap='hot')
-    # axes[1, 0].set_title('dist_outside\n(0 inside, +d outside)')
-    # axes[1, 0].axis('off')
-    # plt.colorbar(im, ax=axes[1, 0], fraction=0.046)
-
-    # 5. Raw SDF
-    # vmax = max(abs(raw_sdf.min()), abs(raw_sdf.max()))
-    # im = axes[1, 1].imshow(raw_sdf, cmap='seismic', vmin=-vmax, vmax=vmax)
-    # axes[1, 1].set_title('Raw SDF\n(red=inside +, blue=outside -)')
-    # axes[1, 1].axis('off')
-    # plt.colorbar(im, ax=axes[1, 1], fraction=0.046)
-
-    # 6. Normalized SDF
-    im = axes[0, 1].imshow(normalised_dl_sdf, cmap='seismic', vmin=-1, vmax=1)
-    axes[0, 1].set_title('Normalized Predicted SDF [-1, +1]\n')
-    axes[0, 1].axis('off')
-    plt.colorbar(im, ax=axes[0, 1], fraction=0.046)
-
-    im = axes[0, 2].imshow(normalised_img_prc_sdf, cmap='seismic', vmin=-1, vmax=1)
-    axes[0, 2].set_title('Normalized Image Processing SDF [-1, +1]\n')
-    axes[0, 2].axis('off')
-    plt.colorbar(im, ax=axes[0,2], fraction=0.046)
-
-    im = axes[0, 0].imshow(normlaised_gt_sdf, cmap='seismic', vmin=-1, vmax=1)
-    axes[0, 0].set_title('Normalized gt SDF [-1, +1]\n')
-    axes[0, 0].axis('off')
-    plt.colorbar(im, ax=axes[0, 0], fraction=0.046)
-
-    # im = axes[0, 1].imshow(normalised_dl_sdf, cmap='seismic', vmin=-1, vmax=1)
-    # axes[0, 1].set_title('Normalized Predicted SDF [-1, +1]\n')
-    # axes[0, 1].axis('off')
-    # plt.colorbar(im, ax=axes[0, 1], fraction=0.046)
-
-    plt.tight_layout()
-    plt.savefig('sdf_visualization2.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    print("Saved to sdf_visualization.png")
-
-    # Print stats
-    # print(f"\nSDF stats:")
-    # print(f"  Raw     — min: {raw_sdf.min():.2f}  max: {raw_sdf.max():.2f}")
-    # print(f"  Norm    — min: {normalized.min():.2f}  max: {normalized.max():.2f}")
-    # print(f"  Inside  pixels: {mask.sum()}")
-    # print(f"  Outside pixels: {(~mask).sum()}")
-    # print(f"  Boundary pixels (SDF=0): {(raw_sdf == 0).sum()}")
-
-
-def visulaise_softmax(argmax,probs_np):
-    class_names = {0: "black", 1: "gray", 2: "white"}  # adjust if needed
-    fig, axes = plt.subplots(1, 3 + 1, figsize=(4 * (3 + 1), 4))
-    im0 = axes[0].imshow(argmax, cmap="tab10", vmin=0, vmax=3 - 1)
-    axes[0].set_title("Argmax (predicted class)")
-    plt.colorbar(im0, ax=axes[0])
-
-    # --- Per-class softmax probability maps ---
-    for c in range(3):
-        im = axes[c + 1].imshow(probs_np[c], cmap="viridis", vmin=0, vmax=1)
-        axes[c + 1].set_title(f"Class {c} ({class_names.get(c, c)}) prob")
-        plt.colorbar(im, ax=axes[c + 1])
-
-    plt.tight_layout()
-    plt.show()
-
-    # --- Also print numeric summary per class ---
-    print("Softmax probability stats per class:")
-    for c in range(3):
-        p = probs_np[c]
-        print(f"  Class {c} ({class_names.get(c, c)}): "
-              f"mean={p.mean():.4f}, max={p.max():.4f}, "
-              f"min={p.min():.4f}, pixels>{0.5:.0f}: {(p > 0.5).sum()}")
-
-    print(f"\nArgmax class distribution:")
-    for c in range(3):
-        count = (argmax == c).sum()
-        print(f"  Class {c} ({class_names.get(c, c)}): {count} pixels "
-              f"({100 * count / argmax.size:.1f}%)")
-
 
 if __name__ == "__main__":
     train_grayscale()
