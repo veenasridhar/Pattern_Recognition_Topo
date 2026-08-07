@@ -31,6 +31,7 @@ from attSets import AttSets
 import wandb
 from cldice_loss_vae import *
 from cldice_vis import *
+from visualizations import *
 from thesis_visualisation import visualize_comparison_with_overlay
 #from input_pipeline_discrete import *
 from tqdm import tqdm
@@ -39,7 +40,7 @@ from tqdm import tqdm
 # Canonical label-map conventions (matches your to_label_map bucketing)
 # ----------------------------------------------------------------------------
 CLS_VOID, CLS_NONDESIGN, CLS_MEMBER = 0, 1, 2
-NUM_CLASSES = 3
+NUM_CLASSES = 2
 
 
 def to_label_map(gray: torch.Tensor) -> torch.Tensor:
@@ -48,8 +49,8 @@ def to_label_map(gray: torch.Tensor) -> torch.Tensor:
     if gray.dim() == 4:
         gray = gray.squeeze(1)
     labels = torch.full_like(gray, CLS_VOID, dtype=torch.long)
-    labels[gray > 64] = CLS_NONDESIGN
-    labels[gray > 192] = CLS_MEMBER
+    labels[gray > 64] = CLS_MEMBER #CLS_NONDESIGN
+    #labels[gray > 192] = CLS_MEMBER
     return labels
 
 
@@ -256,7 +257,7 @@ def aggregate_latents(
 # ----------------------------------------------------------------------------
 class CustomVAE:
 
-    def __init__(self, model, multi_image_mode=True, device=None):
+    def __init__(self, model, multi_image_mode=True, latent_technique = 'learned_aggregation',device=None):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.multi_image_mode = multi_image_mode
@@ -283,35 +284,18 @@ class CustomVAE:
                 "learning_rate": lr,
                 #'kl_weight': kl_weight,
                 'latent_technique': latent_technique,
-                'loss': 'Perceptual Loss ',
+                'loss': 'CE + Cldice',
                 "architecture": "VAE",
                 "dataset": "TO",
                 "epochs": epochs,
                 "fold": fold,
             }, )
-
-        #torch.autograd.set_detect_anomaly(True)
-
-        # for name, module in self.vae.named_modules():
-        #     #print(name, "->", module.__class__.__name__)
-        #     for p in module.parameters():
-        #             p.requires_grad = False
-
-
+        
+        save_path = 'Custom VAE Reconstruction Results_binary'
 
         if self.multi_image_mode:
 
-        #     trainable_modules = [
-        #         self.vae.decoder.up_blocks[2],
-        #         self.vae.decoder.up_blocks[3],   # final upsampling block (highest resolution)
-        #         self.vae.decoder.conv_norm_out,
-        #         self.vae.decoder.conv_out,
-        #     ]
-        #     for module in trainable_modules:
-        #         for p in module.parameters():
-        #             p.requires_grad = True
-
-            optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr, weight_decay=1e-2)
+            optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr) # weight_decay=1e-2
             if latent_technique == 'learned_aggregation':
                 aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=0.001, weight_decay=1e-4)
                 print('The training parameters for the aggregation module are',sum(p.numel() for p in self.aggregation_module.parameters() if p.requires_grad))
@@ -319,13 +303,14 @@ class CustomVAE:
             print('The training parameters for the aggregation module are',sum(p.numel() for p in self.vae.decoder.parameters() if p.requires_grad))
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         else:
-            optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr, weight_decay=1e-4)
+            optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr) # weight_decay=1e-2
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
         
         cldice_loss = soft_dice_cldice()
-        ce_weights = torch.tensor([0.25, 0.35, 0.5],device=self.device)
-        ce_loss = torch.nn.CrossEntropyLoss(weight= ce_weights)
+        # ce_weights = torch.tensor([0.25, 0.35, 0.5],device=self.device)
+        # ce_loss = torch.nn.CrossEntropyLoss(weight= ce_weights)
+        ce_loss = torch.nn.CrossEntropyLoss()
         best_loss = float('inf')
 
         for epoch in range(epochs):
@@ -370,7 +355,7 @@ class CustomVAE:
 
                     with torch.no_grad():                                               # Encoder is not trained during the multi iamge mode
                         print('The unique values of the input images are',combinedimages.unique())
-                        individual_mu, log_var = self.vae.encode(combinedimages).latent_dist        # Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
+                        individual_mu, log_var = self.vae.encode(combinedimages)       # Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
                         #target_posterior = self.vae.encode(target).latent_dist
                         # individual_mu = posterior.mean       # Individual mu is mean represented using 4 latent variables (10,4,32,32)
                         # log_var = posterior.logvar          # Log variance represent the uncertainty or spread of the distribution. (log for stability)
@@ -415,12 +400,12 @@ class CustomVAE:
                         visualize_latent_space(individual_mu, combined_mu,target_mu,)'''
 
                     #with torch.no_grad():
-                    reconstructed = self.vae.decode(z_averaged).sample
+                    reconstructed = self.vae.decode(z_averaged)
 
                     train_ce_loss = ce_loss(reconstructed,target)
                     probs       = torch.softmax(reconstructed, dim=1)
-                    member_prob = probs[:, 2:3]
-                    member_gt   = (target == 2).float().unsqueeze(1)
+                    member_prob = probs[:, 1:2]
+                    member_gt   = (target == 1).float().unsqueeze(1)
                     train_cldice_loss = cldice_loss(member_prob,member_gt)
                     reconstruction_loss =  train_ce_loss + train_cldice_loss
                     #latent_space_exploration(individual_mu, z_averaged, target_mu, self.vae)
@@ -454,9 +439,9 @@ class CustomVAE:
                         print('The shape of the reconstructed image',reconstructed.shape)
                         print('The unique values of the reconstructed image',reconstructed.unique())
 
-                        predicted_binary = (reconstructed == 2).detach().cpu().numpy().astype(np.float32)
-                        gt_binary = (target[i] == 2).detach().cpu().numpy().astype(np.float32)
-                        img_prc_binary = (avg_result[i] ==2).detach().cpu().numpy().astype(np.float32)
+                        predicted_binary = (reconstructed == 1).detach().cpu().numpy().astype(np.float32)
+                        gt_binary = (target[i] == 1).detach().cpu().numpy().astype(np.float32)
+                        img_prc_binary = (avg_result[i] ==1).detach().cpu().numpy().astype(np.float32)
 
                         predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
                         gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
@@ -480,7 +465,7 @@ class CustomVAE:
                         # train_iou_dl += iou_dilated
                         # train_iou_img_prc += iou_dilated_image_processing
 
-                        if epoch % 5 == 0:
+                        if epoch % 5 == 0 and index < 500:
                             if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}')):
                                 os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}'))
                             if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/train')):
@@ -544,14 +529,18 @@ class CustomVAE:
                     images = images.to(self.device)
                     target = target.to(self.device)
 
-                    posterior = self.vae.encode(images).latent_dist      #  Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
-                    individual_mu = posterior.mean
+                    # posterior = self.vae.encode(images).latent_dist      #  Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
+                    # individual_mu = posterior.mean
+                    mu, log_var = self.vae.encode(images)
+                    print('The shape of the mu', mu.shape)
+                    print('The shape of the log_var', log_var.shape)
 
-                    z = posterior.sample()                              # Reparametrization happens internally as it is a function from DiagonalGaussianDistribution class based on the Stable Diffusion VAE model used.
+                    z =  self.vae.reparameterize(mu, log_var)              # Reparametrization happens internally as it is a function from DiagonalGaussianDistribution class based on the Stable Diffusion VAE model used.
+                    print('The shape of the latent space', z.shape)
                     '''if epoch % 5 == 0 and batch < 10:
                         visualize_latent_space_individual(z)                           # z is of shape (B,C,H,W) = (16,4,32,32)'''
 
-                    reconstructed = self.vae.decode(z).sample
+                    reconstructed = self.vae.decode(z)
 
                     print('Reconstructed Unique Values',reconstructed.unique())
                     print('Target Unique Values',target.unique())
@@ -560,10 +549,11 @@ class CustomVAE:
 
                     recon_loss = ce_loss(reconstructed,target)
                     probs       = torch.softmax(reconstructed, dim=1)
-                    member_prob = probs[:, 2:3]
-                    member_gt   = (target == 2).float().unsqueeze(1)
+                    member_prob = probs[:, 1:2]
+                    member_gt   = (target == 1).float().unsqueeze(1)
                     train_cldice_loss = cldice_loss(member_prob,member_gt)
-                    kl_loss = posterior.kl().mean()
+                    kl_loss = self.vae.kl_loss(mu, log_var)
+                    #kl_loss = posterior.kl().mean()
                     loss = recon_loss + kl_weight * kl_loss + train_cldice_loss
 
                     (loss / accum_steps).backward()
@@ -579,18 +569,20 @@ class CustomVAE:
                     
 
                     if epoch%5 == 0 :
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
-                                os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train')):
-                            os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train'))
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}')):
-                            os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}'))
+                        if not os.path.exists(os.path.join(save_path)):
+                                os.mkdir(os.path.join(save_path))
+                        if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}'))
+                        if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/train')):
+                            os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/train'))
+                        if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/train/Epoch {epoch}')):
+                            os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/train/Epoch {epoch}'))
                         print('The shape of the reconstructed individual image',reconstructed.shape)
                         reconstructed = torch.argmax(reconstructed, dim=1)
-                        visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}',False)
                         
+                        if index <50:
+                            visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/train/Epoch {epoch}',False)
+                        index += 1
                         #latent_space_exploration(individual_mu, None, None, self.vae)
                         #visualize_feature_maps(images, individual_mu, False)
 
@@ -621,6 +613,7 @@ class CustomVAE:
 
             val_progress_bar = tqdm(val_loader,desc=f'Epoch {epoch}/{epochs}')
             if val_loader:
+                val_index = 0
                 print('The length of val loader', len(val_loader))
                 self.vae.eval()
                 if latent_technique == 'learned_aggregation':
@@ -639,11 +632,11 @@ class CustomVAE:
                             combinedimages = images.reshape(-1, *images.shape[2:]).to(self.device)
                             #combinedimages = combinedimages.unsqueeze(dim=1)                    # Only for grayscale images
 
-                            posterior = self.vae.encode(combinedimages).latent_dist
+                            individual_mu, individual_log_var = self.vae.encode(combinedimages)
                             #target_posterior = self.vae.encode(target).latent_dist
 
-                            individual_mu = posterior.mean  # Individual mu is mean represented using 4 latent variables (10,4,32,32)
-                            log_var = posterior.logvar  # Log variance represent the uncertainty or spread of the distribution. (log for stability)
+                            individual_mu = individual_mu  # Individual mu is mean represented using 4 latent variables (10,4,32,32)
+                            log_var = individual_log_var  # Log variance represent the uncertainty or spread of the distribution. (log for stability)
 
                             # Reshape it to (B,N,latent_dimension,H,W)
                             mu = individual_mu.reshape(batch_size, num_imgs, *individual_mu.shape[1:])  # (B,N,latent_dimension,H,W) = (2,5,4,32,32)
@@ -682,14 +675,14 @@ class CustomVAE:
                             '''if epoch % 5 == 0 and batch < 10:
                                 visualize_latent_space(individual_mu, combined_mu, target_mu,epoch,batch,)'''
 
-                            reconstructed = self.vae.decode(z_averaged).sample
+                            reconstructed = self.vae.decode(z_averaged)
 
                             #latent_space_exploration(individual_mu, averaged_mu, target_mu, self.vae)
 
                             val_ce_loss = ce_loss(reconstructed,target)
                             probs       = torch.softmax(reconstructed, dim=1)
-                            member_prob = probs[:, 2:3]
-                            member_gt   = (target == 2).float().unsqueeze(1)
+                            member_prob = probs[:, 1:2]
+                            member_gt   = (target == 1).float().unsqueeze(1)
                             val_cldice_loss = cldice_loss(member_prob,member_gt)
                             reconstruction_val_loss =  val_ce_loss + val_cldice_loss
 
@@ -709,9 +702,9 @@ class CustomVAE:
                                 # print('The shape of the reconstructed image',reconstructed.shape)
                                 # print('The unique values of the reconstructed image',reconstructed.unique())
                                 
-                                predicted_binary = (reconstructed == 2).detach().cpu().numpy().astype(np.float32)
-                                gt_binary = (target[i] == 2).detach().cpu().numpy().astype(np.float32)
-                                img_prc_binary = (avg_result[i] ==2).detach().cpu().numpy().astype(np.float32)
+                                predicted_binary = (reconstructed == 1).detach().cpu().numpy().astype(np.float32)
+                                gt_binary = (target[i] == 1).detach().cpu().numpy().astype(np.float32)
+                                img_prc_binary = (avg_result[i] ==1).detach().cpu().numpy().astype(np.float32)
 
                                 predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
                                 gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
@@ -735,7 +728,7 @@ class CustomVAE:
                                 # train_iou_dl += iou_dilated
                                 # train_iou_img_prc += iou_dilated_image_processing
 
-                                if epoch % 5 == 0:
+                                if epoch % 5 == 0 and index < 500:
                                     if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}')):
                                         os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}'))
                                     if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}/val')):
@@ -785,35 +778,40 @@ class CustomVAE:
                             images = images.to(self.device)
                             target = target.to(self.device)
 
-                            posterior = self.vae.encode(images).latent_dist
-                            individual_mu = posterior.mean
-                            z = posterior.sample()
-                            reconstructed = self.vae.decode(z).sample
+                            mu, log_var = self.vae.encode(images)
+                            print('The shape of the mu', mu.shape)
+                            print('The shape of the log_var', log_var.shape)
 
-                            
+                            z =  self.vae.reparameterize(mu, log_var)              # Reparametrization happens internally as it is a function from DiagonalGaussianDistribution class based on the Stable Diffusion VAE model used.
+                            print('The shape of the latent space', z.shape)
+                    
+                            reconstructed = self.vae.decode(z)
+
                             recon_loss = ce_loss(reconstructed,target)
                             probs       = torch.softmax(reconstructed, dim=1)
-                            member_prob = probs[:, 2:3]
-                            member_gt   = (target == 2).float().unsqueeze(1)
+                            member_prob = probs[:, 1:2]
+                            member_gt   = (target == 1).float().unsqueeze(1)
                             val_cldice_loss = cldice_loss(member_prob,member_gt)
-                                
-                            kl_loss = posterior.kl().mean()
+                            kl_loss = self.vae.kl_loss(mu, log_var)
 
                             val_loss = recon_loss + kl_weight * kl_loss + val_cldice_loss
 
                             if epoch%5 == 0 :
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
-                                        os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}'))
+                                if not os.path.exists(os.path.join(save_path)):
+                                        os.mkdir(os.path.join(save_path))
+                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}'))
+                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/val')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/val'))
+                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/val/Epoch {epoch}')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/val/Epoch {epoch}'))
                                 print('The shape of the reconstructed individual image',reconstructed.shape)
                                 reconstructed = torch.argmax(reconstructed, dim=1)
-                                visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}',False)
-                        
+                                
+                                if val_index <50:
+                                    visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/val/Epoch {epoch}',False)
+
+                                val_index += 1
                                 # latent_space_exploration(individual_mu, None, None, self.vae)
                                 # visualize_feature_maps(images, individual_mu, False)
 
@@ -847,7 +845,7 @@ class CustomVAE:
             if test_loader:
                 print('The length of test loader',len(test_loader))
                 self.vae.eval()
-                index =0
+                test_index =0
                 with torch.no_grad():
                     if self.multi_image_mode:
                         for batch, input in enumerate(test_progress_bar):
@@ -858,11 +856,11 @@ class CustomVAE:
                             batch_size, num_imgs = images.shape[0], images.shape[1]
                             combinedimages = images.reshape(-1, *images.shape[2:]).to(self.device)
 
-                            posterior = self.vae.encode(combinedimages).latent_dist
+                            individual_mu, individual_log_var = self.vae.encode(combinedimages)
                             #target_posterior = self.vae.encode(target).latent_dist
 
-                            individual_mu = posterior.mean  # Individual mu is mean represented using 4 latent variables (10,4,32,32)
-                            log_var = posterior.logvar  # Log variance represent the uncertainty or spread of the distribution. (log for stability)
+                            individual_mu = individual_mu  # Individual mu is mean represented using 4 latent variables (10,4,32,32)
+                            log_var = individual_log_var  # Log variance represent the uncertainty or spread of the distribution. (log for stability)
 
                             # Reshape it to (B,N,latent_dimension,H,W)
                             mu = individual_mu.reshape(batch_size, num_imgs, *individual_mu.shape[1:])  # (B,N,latent_dimension,H,W) = (2,5,4,32,32)
@@ -905,12 +903,12 @@ class CustomVAE:
                             elif latent_technique == 'learned_aggregation':
                                  z_averaged =  self.aggregation_module(individual_mu, sample = False,num_imgs=num_imgs, batch_size=batch_size)
 
-                            reconstructed = self.vae.decode(z_averaged).sample
+                            reconstructed = self.vae.decode(z_averaged)
 
                             test_ce_loss = ce_loss(reconstructed,target)
                             probs       = torch.softmax(reconstructed, dim=1)
-                            member_prob = probs[:, 2:3]
-                            member_gt   = (target == 2).float().unsqueeze(1)
+                            member_prob = probs[:, 1:2]
+                            member_gt   = (target == 1).float().unsqueeze(1)
                             test_cldice_loss = cldice_loss(member_prob,member_gt)
                             reconstruction_loss =  test_ce_loss + test_cldice_loss
                             reconstruction_test_loss =  test_ce_loss + test_cldice_loss
@@ -928,9 +926,9 @@ class CustomVAE:
                                 print('The unique values of the reconstructed image',reconstructed.unique())
                                 
                                 
-                                predicted_binary = (reconstructed == 2).detach().cpu().numpy().astype(np.float32)
-                                gt_binary = (target[i] == 2).detach().cpu().numpy().astype(np.float32)
-                                img_prc_binary = (avg_result[i] ==2).detach().cpu().numpy().astype(np.float32)
+                                predicted_binary = (reconstructed == 1).detach().cpu().numpy().astype(np.float32)
+                                gt_binary = (target[i] == 1).detach().cpu().numpy().astype(np.float32)
+                                img_prc_binary = (avg_result[i] ==1).detach().cpu().numpy().astype(np.float32)
 
                                 predicted_skeleton = skeletonize(predicted_binary > 0).astype(np.float32)
                                 gt_skeleton = skeletonize(gt_binary > 0).astype(np.float32)
@@ -954,7 +952,7 @@ class CustomVAE:
                                 # test_iou_dl += iou_dilated
                                 # test_iou_img_prc += iou_dilated_image_processing
 
-                                if epoch % 5 == 0:
+                                if epoch % 5 == 0 and index < 500:
                                 
                                     if not os.path.exists(os.path.join(f'./output_images_{latent_technique}_{fold}')):
                                         os.mkdir(os.path.join(f'./output_images_{latent_technique}_{fold}'))
@@ -1005,42 +1003,39 @@ class CustomVAE:
                             images = images.to(self.device)
                             target = target.to(self.device)
 
-                            posterior = self.vae.encode(images).latent_dist
-                            individual_mu = posterior.mean
-                            z = posterior.sample()
-                            reconstructed = self.vae.decode(z).sample
+                            mu, log_var = self.vae.encode(images)
+                            print('The shape of the mu', mu.shape)
+                            print('The shape of the log_var', log_var.shape)
 
-                            '''if epoch > 10 and batch < 5:
-                                visualize_feature_maps(images, individual_mu, False)
-                                latent_space_exploration(individual_mu, None, None, self.vae)'''
-
-                            #target = target.squeeze(dim=1)
-                            # print('Reconstructed',reconstructed.shape)
-                            # print('Target',target.shape)
+                            z =  self.vae.reparameterize(mu, log_var)              # Reparametrization happens internally as it is a function from DiagonalGaussianDistribution class based on the Stable Diffusion VAE model used.
+                            print('The shape of the latent space', z.shape)
+                    
+                            reconstructed = self.vae.decode(z)
 
                             recon_loss = ce_loss(reconstructed,target)
                             probs       = torch.softmax(reconstructed, dim=1)
-                            member_prob = probs[:, 2:3]
-                            member_gt   = (target == 2).float().unsqueeze(1)
+                            member_prob = probs[:, 1:2]
+                            member_gt   = (target == 1).float().unsqueeze(1)
                             test_cldice_loss = cldice_loss(member_prob,member_gt)
-                                
-                            kl_loss = posterior.kl().mean()
+                            kl_loss = self.vae.kl_loss(mu, log_var)
 
                             t_loss = recon_loss + kl_weight * kl_loss + test_cldice_loss
 
                             if epoch%5 == 0 :
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
-                                        os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}'))
+                                if not os.path.exists(os.path.join(save_path)):
+                                        os.mkdir(os.path.join(save_path))
+                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}'))
+                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/test')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/test'))
+                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/test/Epoch {epoch}')):
+                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/test/Epoch {epoch}'))
                                 print('The shape of the reconstructed individual image',reconstructed.shape)
                                 reconstructed = torch.argmax(reconstructed, dim=1)
-                                visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}',False)
-                        
+                                if test_index <50:
+                                    visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}',False)
+
+                                test_index += 1
 
                             test_vae_loss += t_loss.item()
                             test_mse_loss += recon_loss.item()
@@ -1051,7 +1046,7 @@ class CustomVAE:
                             #reconstructed = torch.argmax(reconstructed, dim=1)
 
                             # if epoch%50 == 0:
-                            #     visulaize_images_individual(batch,epoch, reconstructed, images,None,f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/', True)
+                            #     visulaize_images_individual(batch,epoch, reconstructed, images,None,save_path/individual_images_Fold {fold}/test/', True)
 
                                 # Printing the step loss values in the progress bar
                             test_progress_bar.set_postfix({
@@ -1065,7 +1060,7 @@ class CustomVAE:
                 best_loss = test_vae_loss
                 if self.multi_image_mode:
                     torch.save(self.vae, f'./finetuned_vae/VAE_common_structures_checkpoint_{latent_technique}.pth')
-                    self.vae.save_pretrained(f'finetuned_vae/common_structures_recon_{latent_technique}')
+                    #self.vae.save_pretrained(f'finetuned_vae/common_structures_recon_{latent_technique}')
                     if latent_technique == 'learned_aggregation':
                         torch.save({
                             'vae': self.vae,
@@ -1073,8 +1068,8 @@ class CustomVAE:
                         }, f'./finetuned_vae/checkpoint_{latent_technique}.pth')
 
                 else:
-                    torch.save(self.vae,'./finetuned_vae/VAE_individual_checkpoint_ce_cldice.pth')
-                    self.vae.save_pretrained('finetuned_vae/individually_trained_models_ce_cldice')
+                    torch.save(self.vae,'./finetuned_vae/Custom VAE_individual_checkpoint_ce_cldice.pth')
+                    #self.vae.save_pretrained('finetuned_vae/individually_trained_models_ce_cldice')
 
                 print(f'Model Saved with test loss {test_vae_loss / len(test_loader):.4f}')
 

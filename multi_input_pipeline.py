@@ -73,6 +73,19 @@ def indices_for_views(view_names, assigned):
     idx = lambda s: np.array([i for i, v in enumerate(view_names) if v in assigned[s]])
     return idx(0), idx(1), idx(2)                        # train, val, test
 
+def create_image_groups(image_directory):
+    image_groups = []
+    if image_directory:
+        for sub_dir in sorted(os.listdir(image_directory), key=natural_sort_key):
+            image_group = []
+            for images in sorted(os.listdir(os.path.join(image_directory, sub_dir)), key=natural_sort_key):
+                if str(images).endswith('.png'):
+                    image_group.append(os.path.join(image_directory, sub_dir, images))
+                    # print(image_group)
+            image_groups.append(image_group)
+        # print(image_groups)
+    return image_groups
+
 class ImageDataset(Dataset):
     def __init__(self, subbatch_dirs, idx, augment,
                  p_flip=0.5,            # prob of group-consistent horizontal flip (GT flipped too)
@@ -173,8 +186,113 @@ class ImageDataset(Dataset):
  
         return images, target
 
+class TopoDataset_Augmented(Dataset):
+    def __init__(self, subbatch_dirs, idx, ground_truth_dir, img_proc_dir, augment,
+                 p_flip=0.5,            # prob of group-consistent horizontal flip (GT flipped too)
+                 p_permute=0.5,         # prob of shuffling view order (GT unchanged)
+                 p_corrupt=0.5,         # prob of corrupting a minority of views (GT unchanged)
+                 max_corrupted_views=2, # never corrupt more than 2 of 5 -> majority stays intact
+                 n_patches=(1, 3),      # patches per corrupted view (min, max)
+                 patch_frac=(0.08, 0.25),  # patch side length as fraction of H/W (min, max)
+                 noise_std=(0.05, 0.20)):  # Gaussian noise strength range
+        self.subbatch_dirs = subbatch_dirs
+        self.indices = idx
+        self.ground_truth_dir = ground_truth_dir
+        self.img_proc_dir = img_proc_dir
+        self.augment = augment
+ 
+        self.p_flip = p_flip
+        self.p_permute = p_permute
+        self.p_corrupt = p_corrupt
+        self.max_corrupted_views = max_corrupted_views
+        self.n_patches = n_patches
+        self.patch_frac = patch_frac
+        self.noise_std = noise_std
+ 
+        # Base transforms (applied to images, labels, avg_output alike).
+        # All random augmentations are done manually in __getitem__ so that
+        # group-consistency (flip) vs. per-view (corruption) is explicit.
+        self.base_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),   # scales to [0,1]
+            #v2.Grayscale(num_output_channels=3),     # Only for VAE approach
+        ])
+ 
+    def __len__(self):
+        return len(self.indices)
+ 
+    def convert_labels(self, input):
+        input = input.clone()
+        input[input < 0.4] = 0
+        input[input > 0.75] = 2
+        input[(input >= 0.4) & (input <= 0.75)] = 1
+        return input.long()
+    
+    def to_label_map(self,gray):                     # gray: [..., 1, H, W] uint8
+        g = gray.squeeze(-3).long()             # [..., H, W]
+        lm = torch.ones_like(g)                 # default: non-design (1)
+        lm[g < 64]   = 0                        # void
+        lm[g >= 192] = 2                        # structural member
+        return lm
+
+    # ------------------------------------------------------------------
+    # Augmentations
+    # ------------------------------------------------------------------
+    def _group_flip(self, images, labels, avg_output):
+        """Horizontal flip applied consistently to ALL views + GT + avg output."""
+        images = torch.flip(images, dims=[-1])
+        labels = torch.flip(labels, dims=[-1])
+        avg_output = torch.flip(avg_output, dims=[-1])
+        return images, labels, avg_output
+ 
+    def _permute_views(self, images):
+        """Shuffle the order of the 5 views. Consensus is order-invariant,
+        so GT stays unchanged."""
+        perm = torch.randperm(images.shape[0])
+        return images[perm]
+ 
+    # ------------------------------------------------------------------
+    def __getitem__(self, i):
+        index = self.indices[i]
+        sub_dir = self.subbatch_dirs[index]
+        sub = (sub_dir.split('/')[-1]).split(' ')[-1]
+ 
+        image_files = sorted(glob.glob(os.path.join(sub_dir, '*.png')))  # the 5 images
+        images = torch.stack(
+            [torchvision.io.decode_image(f, torchvision.io.ImageReadMode.GRAY)
+             for f in image_files], dim=0)  # [5, 1, H, W]
+        labels = torchvision.io.decode_image(
+            os.path.join(self.ground_truth_dir, f'gt {sub}.png'),
+            torchvision.io.ImageReadMode.GRAY)
+        avg_output = torchvision.io.decode_image(
+            os.path.join(self.img_proc_dir, f'result_{sub}.png'),
+            torchvision.io.ImageReadMode.GRAY)
+        
+        if self.augment:
+            # 1) Group-consistent geometric transform: GT must follow
+            if random.random() < self.p_flip:
+                images, labels, avg_output = self._group_flip(images, labels, avg_output)
+ 
+            # 2) View permutation: GT unchanged (consensus is a set operation)
+            if random.random() < self.p_permute:
+                images = self._permute_views(images)
+ 
+        image_labels  = self.to_label_map(images)        # [5, H, W] long
+        label_map    = self.to_label_map(labels)         # [H, W]    long
+        avg_label    = self.to_label_map(avg_output)     # [H, W]    long
+
+        #images = image_labels
+        
+        # ---- encoder input: one-hot, scaled to [-1, 1] ----
+        images = F.one_hot(image_labels, num_classes=3)        # [5, H, W, 3]
+        images = images.permute(0, 3, 1, 2).float()      # [5, 3, H, W]
+        
+        print('The shape of the images', images.shape)
+        print(' The unique hot encoded railway images', images.unique())
+ 
+        return images, label_map, avg_label
+
 def input_pipeline_discretevals(data_directory, individual_directory,
-                                ground_truth_dir, image_processing_dir, fold,single_image_reconstruction,
+                                ground_truth_dir, image_processing_dir, fold,single_image_reconstruction,augmented_directory=None,
                                 ratios=(0.7, 0.2, 0.1), seed_base=0):
 
     # --- multi-image (batched) dir defines the canonical view split ---
@@ -191,7 +309,7 @@ def input_pipeline_discretevals(data_directory, individual_directory,
     # split log (per fold)
     split_log = {name: sorted(assigned[s]) for name, s in
                  [("train", 0), ("val", 1), ("test", 2)]}
-    with open(f"split_fold{fold}.json", "w") as f:
+    with open(f"split_fold{fold}_individual.json", "w") as f:
         json.dump(split_log, f, indent=2)
     
     if single_image_reconstruction:
@@ -206,4 +324,135 @@ def input_pipeline_discretevals(data_directory, individual_directory,
         val   = TopoDataset_Augmented(items_m, va_m, ground_truth_dir, image_processing_dir, augment=False)
         test  = TopoDataset_Augmented(items_m, te_m, ground_truth_dir, image_processing_dir, augment=False)
 
+         # ---- add offline-augmented batches to TRAIN ONLY ----
+        if augmented_directory is not None:
+            items_a, views_a = build_subbatch_items(augmented_directory)
+
+            # same view assignment -> augmented copy of a val/test batch
+            # can NEVER end up in train
+            unknown_a = set(views_a) - set().union(*assigned.values())
+            assert not unknown_a, f"views in augmented dir not in batched dir: {unknown_a}"
+
+            tr_a, _, _ = indices_for_views(views_a, assigned)   # keep only train views
+
+            train_aug = TopoDataset_Augmented(
+                items_a, tr_a,
+                aug_ground_truth_dir or ground_truth_dir,
+                aug_img_proc_dir or image_processing_dir,
+                augment=True)
+
+            train = ConcatDataset([train, train_aug])   # val/test untouched
+
     return train,val,test
+
+
+class OpenTOConsensusDatasetdisc(Dataset):
+    def __init__(self,image_groups, ground_truth_dir, img_prc_dir, augment):
+        self.subbatch_dirs = image_groups
+        self.ground_truth_dir = ground_truth_dir
+        self.img_proc_dir = img_prc_dir
+        self.augment = augment
+        self.base_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),   # scales to [0,1]
+            v2.Grayscale(num_output_channels=3),     # Only for VAE approach
+        ])
+    
+    def __len__(self):
+        return len(self.subbatch_dirs)
+    
+    def to_label_map(self,gray):                     # gray: [..., 1, H, W] uint8
+            g = gray.squeeze(-3).long()             # [..., H, W]
+            lm = torch.ones_like(g)                 # default: non-design (1)
+            lm[g < 64]   = 0                        # void
+            lm[g >= 192] = 2                        # structural member
+            return lm
+
+    def __getitem__(self, i):
+        sub_dir = self.subbatch_dirs[i]
+        print(sub_dir)
+        sub = (sub_dir[0].split('/')[-2]).split(' ')[-1]
+        print(sub)
+        #sub = i
+
+        print(sub_dir, sub)
+        #image_files = sorted(glob.glob(os.path.join(sub_dir, '*.png')))  # the 5 images
+        images = torch.stack(
+            [torchvision.io.decode_image(f, torchvision.io.ImageReadMode.GRAY)
+             for f in sub_dir], dim=0)  # [5, 1, H, W]
+        labels = torchvision.io.decode_image(
+            os.path.join(self.ground_truth_dir, f'gt {sub}.png'),
+            torchvision.io.ImageReadMode.GRAY)
+        avg_output = torchvision.io.decode_image(
+            os.path.join(self.img_proc_dir, f'result_{sub}.png'),
+            torchvision.io.ImageReadMode.GRAY)
+        
+        print('TO Dataset labels',labels.unique())
+        
+        image_labels  = self.to_label_map(images)       # [5, H, W] long
+        label_map    = self.to_label_map(labels)         # [H, W]    long
+        avg_label    = self.to_label_map(avg_output)     # [H, W]    long
+
+        #images = image_labels
+        
+        # ---- encoder input: one-hot, scaled to [-1, 1] ----
+        images = F.one_hot(image_labels, num_classes=3)        # [5, H, W, 3]
+        images = images.permute(0, 3, 1, 2).float()      # [5, 3, H, W]
+        # print('The shape of the images', images.shape)
+        # print('The type of the images', images.dtype)
+        
+        # Deterministic base transforms for everything
+        # images = self.base_transformations(images)
+        # labels = self.base_transformations(labels)
+        # avg_output = self.base_transformations(avg_output)
+ 
+        # if self.augment:
+        #     # 1) Group-consistent geometric transform: GT must follow
+        #     if random.random() < self.p_flip:
+        #         images, labels, avg_output = self._group_flip(images, labels, avg_output)
+ 
+        #     # 2) View permutation: GT unchanged (consensus is a set operation)
+        #     if random.random() < self.p_permute:
+        #         images = self._permute_views(images)
+ 
+        #     # 3) Minority-view corruption: GT unchanged (majority preserved)
+        #     if random.random() < self.p_corrupt:
+        #         images = self._corrupt_minority_views(images)
+ 
+        return images, label_map , avg_label
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

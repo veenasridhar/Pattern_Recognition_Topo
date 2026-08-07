@@ -47,3 +47,12 @@ venv/
 /Residual Convolutional Network Results_original size_Fold 2/
 *.sh
 slurm-*
+secrets
+split_fold0_individual.json
+split_fold0.json
+split_fold1_individual.json
+split_fold2_individual.json
+split_fold3_individual.json
+split_fold0.json
+OpenTO_Consensus_Dataset_reduced_thickness_cldice/manifest.csv
+OpenTO_Consensus_Dataset_reduced_thickness_cldice/manifest1.csv

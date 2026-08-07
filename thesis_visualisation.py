@@ -61,8 +61,8 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
     row_height = max(aspect * col_width, 1.2)  # minimum 1.2 inches per row
     # prevents tiny rows for wide images
 
-    n_rows = 5
-    n_cols = 3
+    # n_rows = 5
+    # n_cols = 3
 
     fig_height = n_groups * (n_rows * row_height + 0.8)
     fig_width = n_cols * col_width
@@ -138,14 +138,14 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         if g_idx == 0:
             ax_pred.set_title("Model Prediction", fontsize=8, fontweight='bold', pad=4)
 
-        # ax_pred_ov = fig.add_subplot(inner_gs[2, 2])
-        # ax_pred_ov.imshow(pred_overlay)
-        # ax_pred_ov.set_xticks([]); ax_pred_ov.set_yticks([])
-        # for spine in ax_pred_ov.spines.values():
-        #     spine.set_visible(False)
-        # if g_idx == 0:
-        #     ax_pred_ov.set_title("Model Overlay", fontsize=7.5,
-        #                           fontstyle='italic', pad=3)
+        ax_pred_ov = fig.add_subplot(inner_gs[0:2, 3])
+        ax_pred_ov.imshow(pred_overlay)
+        ax_pred_ov.set_xticks([]); ax_pred_ov.set_yticks([])
+        for spine in ax_pred_ov.spines.values():
+            spine.set_visible(False)
+        if g_idx == 0:
+            ax_pred_ov.set_title("Model Overlay", fontsize=7.5,
+                                  fontstyle='italic', pad=3)
         # metrics as xlabel directly under overlay
         ax_pred.set_xlabel(
             f"clDice: {cld_pred:.3f}  |  clP: {prec_pred:.3f}  |  clR: {rec_pred:.3f} \n iou:{iou_dl}",
@@ -161,14 +161,14 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
         if g_idx == 0:
             ax_base.set_title("Baseline", fontsize=8, fontweight='bold', pad=4)
 
-        # ax_base_ov = fig.add_subplot(inner_gs[2, 3])
-        # ax_base_ov.imshow(base_overlay)
-        # ax_base_ov.set_xticks([]); ax_base_ov.set_yticks([])
-        # for spine in ax_base_ov.spines.values():
-        #     spine.set_visible(False)
-        # if g_idx == 0:
-        #     ax_base_ov.set_title("Baseline Overlay", fontsize=7.5,
-        #                           fontstyle='italic', pad=3)
+        ax_base_ov = fig.add_subplot(inner_gs[2:4, 3])
+        ax_base_ov.imshow(base_overlay)
+        ax_base_ov.set_xticks([]); ax_base_ov.set_yticks([])
+        for spine in ax_base_ov.spines.values():
+            spine.set_visible(False)
+        if g_idx == 0:
+            ax_base_ov.set_title("Baseline Overlay", fontsize=7.5,
+                                  fontstyle='italic', pad=3)
         ax_base.set_xlabel(
             f"clDice: {cld_base:.3f}  |  clP: {prec_base:.3f}  |  clR: {rec_base:.3f}\n iou:{iou_img_prc}",
             fontsize=10, fontweight='bold', color='#111111', labelpad=3

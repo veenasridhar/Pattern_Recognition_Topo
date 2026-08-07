@@ -50,6 +50,17 @@ from skimage.morphology import skeletonize
 
 IMG_EXTS = {".png", ".bmp", ".tif", ".tiff", ".jpg", ".jpeg"}
 
+def dataset_filter(data_sample, min_size = 72, min_vf=0.2, max_vf= 0.7):
+    img = data_sample['topology']
+    w,h = img.size
+    #volume_fraction = data_sample['volume fraction']
+
+    valid_size =  min_size <= w and min_size <= h
+    #valid_vf = min_vf <= volume_fraction <= max_vf
+
+    return valid_size
+
+
 
 def measure_gray(g, thin_px: float):
     """Metrics for one design given a grayscale array (float or uint8).

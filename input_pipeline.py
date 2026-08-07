@@ -148,85 +148,86 @@ class TopoDatasetImg(Dataset):
         images = images.float()
         print('The unique values in images ', images.unique())
         print('The unique values in labels', labels.unique())
+        print('The shape of images', images.shape)
         labels = self.convert_labels(labels)
         avg_output = self.convert_labels(avg_output)
         
         #sdf = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing', f'sdf_{sub}.npy'))).float()
         return images, labels, avg_output
 
-class OpenTOConsensusDatasetdisc(Dataset):
-    def __init__(self,image_groups, ground_truth_dir, img_prc_dir, augment):
-        self.subbatch_dirs = image_groups
-        self.ground_truth_dir = ground_truth_dir
-        self.img_proc_dir = img_prc_dir
-        self.augment = augment
-        self.base_transformations = v2.Compose([
-            v2.ToDtype(torch.float32, scale=True),   # scales to [0,1]
-            v2.Grayscale(num_output_channels=3),     # Only for VAE approach
-        ])
+# class OpenTOConsensusDatasetdisc(Dataset):
+#     def __init__(self,image_groups, ground_truth_dir, img_prc_dir, augment):
+#         self.subbatch_dirs = image_groups
+#         self.ground_truth_dir = ground_truth_dir
+#         self.img_proc_dir = img_prc_dir
+#         self.augment = augment
+#         self.base_transformations = v2.Compose([
+#             v2.ToDtype(torch.float32, scale=True),   # scales to [0,1]
+#             v2.Grayscale(num_output_channels=3),     # Only for VAE approach
+#         ])
     
-    def __len__(self):
-        return len(self.subbatch_dirs)
+#     def __len__(self):
+#         return len(self.subbatch_dirs)
     
-    def to_label_map(self,gray):                     # gray: [..., 1, H, W] uint8
-            g = gray.squeeze(-3).long()             # [..., H, W]
-            lm = torch.ones_like(g)                 # default: non-design (1)
-            lm[g < 64]   = 0                        # void
-            lm[g >= 192] = 2                        # structural member
-            return lm
+#     def to_label_map(self,gray):                     # gray: [..., 1, H, W] uint8
+#             g = gray.squeeze(-3).long()             # [..., H, W]
+#             lm = torch.ones_like(g)                 # default: non-design (1)
+#             lm[g < 64]   = 0                        # void
+#             lm[g >= 192] = 2                        # structural member
+#             return lm
 
-    def __getitem__(self, i):
-        sub_dir = self.subbatch_dirs[i]
-        print(sub_dir)
-        sub = (sub_dir[0].split('/')[-2]).split(' ')[-1]
-        print(sub)
-        #sub = i
+#     def __getitem__(self, i):
+#         sub_dir = self.subbatch_dirs[i]
+#         print(sub_dir)
+#         sub = (sub_dir[0].split('/')[-2]).split(' ')[-1]
+#         print(sub)
+#         #sub = i
 
-        print(sub_dir, sub)
-        #image_files = sorted(glob.glob(os.path.join(sub_dir, '*.png')))  # the 5 images
-        images = torch.cat(
-            [torchvision.io.decode_image(f, torchvision.io.ImageReadMode.GRAY)
-             for f in sub_dir], dim=0)  # [5, 1, H, W]
-        labels = torchvision.io.decode_image(
-            os.path.join(self.ground_truth_dir, f'gt {sub}.png'),
-            torchvision.io.ImageReadMode.GRAY)
-        avg_output = torchvision.io.decode_image(
-            os.path.join(self.img_proc_dir, f'result_{sub}.png'),
-            torchvision.io.ImageReadMode.GRAY)
+#         print(sub_dir, sub)
+#         #image_files = sorted(glob.glob(os.path.join(sub_dir, '*.png')))  # the 5 images
+#         images = torch.cat(
+#             [torchvision.io.decode_image(f, torchvision.io.ImageReadMode.GRAY)
+#              for f in sub_dir], dim=0)  # [5, 1, H, W]
+#         labels = torchvision.io.decode_image(
+#             os.path.join(self.ground_truth_dir, f'gt {sub}.png'),
+#             torchvision.io.ImageReadMode.GRAY)
+#         avg_output = torchvision.io.decode_image(
+#             os.path.join(self.img_proc_dir, f'result_{sub}.png'),
+#             torchvision.io.ImageReadMode.GRAY)
         
-        print('TO Dataset labels',labels.unique())
+#         print('TO Dataset labels',labels.unique())
         
-        image_labels  = self.to_label_map(images).float()        # [5, H, W] long
-        label_map    = self.to_label_map(labels)         # [H, W]    long
-        avg_label    = self.to_label_map(avg_output)     # [H, W]    long
+#         image_labels  = self.to_label_map(images).float()        # [5, H, W] long
+#         label_map    = self.to_label_map(labels)         # [H, W]    long
+#         avg_label    = self.to_label_map(avg_output)     # [H, W]    long
 
-        #images = image_labels
+#         #images = image_labels
         
-        # ---- encoder input: one-hot, scaled to [-1, 1] ----
-        #images = F.one_hot(image_labels, num_classes=3)        # [5, H, W, 3]
-        #images = images.permute(0, 3, 1, 2).float()      # [5, 3, H, W]
-        # print('The shape of the images', images.shape)
-        # print('The type of the images', images.dtype)
+#         # ---- encoder input: one-hot, scaled to [-1, 1] ----
+#         #images = F.one_hot(image_labels, num_classes=3)        # [5, H, W, 3]
+#         #images = images.permute(0, 3, 1, 2).float()      # [5, 3, H, W]
+#         # print('The shape of the images', images.shape)
+#         # print('The type of the images', images.dtype)
         
-        # Deterministic base transforms for everything
-        # images = self.base_transformations(images)
-        # labels = self.base_transformations(labels)
-        # avg_output = self.base_transformations(avg_output)
+#         # Deterministic base transforms for everything
+#         # images = self.base_transformations(images)
+#         # labels = self.base_transformations(labels)
+#         # avg_output = self.base_transformations(avg_output)
  
-        # if self.augment:
-        #     # 1) Group-consistent geometric transform: GT must follow
-        #     if random.random() < self.p_flip:
-        #         images, labels, avg_output = self._group_flip(images, labels, avg_output)
+#         # if self.augment:
+#         #     # 1) Group-consistent geometric transform: GT must follow
+#         #     if random.random() < self.p_flip:
+#         #         images, labels, avg_output = self._group_flip(images, labels, avg_output)
  
-        #     # 2) View permutation: GT unchanged (consensus is a set operation)
-        #     if random.random() < self.p_permute:
-        #         images = self._permute_views(images)
+#         #     # 2) View permutation: GT unchanged (consensus is a set operation)
+#         #     if random.random() < self.p_permute:
+#         #         images = self._permute_views(images)
  
-        #     # 3) Minority-view corruption: GT unchanged (majority preserved)
-        #     if random.random() < self.p_corrupt:
-        #         images = self._corrupt_minority_views(images)
+#         #     # 3) Minority-view corruption: GT unchanged (majority preserved)
+#         #     if random.random() < self.p_corrupt:
+#         #         images = self._corrupt_minority_views(images)
  
-        return image_labels, label_map , avg_label
+#         return image_labels, label_map , avg_label
 
 class TopoDataset(Dataset):
     def __init__(self, subbatch_dirs, idx, ground_truth_dir, img_proc_dir ,augment):
@@ -597,6 +598,51 @@ class ImageDataset(Dataset):
         img = F.one_hot(label_map, num_classes=3).permute(2, 0, 1).float()  # [3,H,W]
         #img = torch.nn.functional.one_hot(img.long(), num_classes=3).permute(2, 0, 1).float()
         return img, label_map
+
+def create_individual_images(image_directory):
+    image_groups = []
+    if image_directory:
+        for sub_dir in sorted(os.listdir(image_directory), key=natural_sort_key):
+            for images in sorted(os.listdir(os.path.join(image_directory, sub_dir)), key=natural_sort_key):
+                if str(images).endswith('.png'):
+                    image_groups.append(os.path.join(image_directory, sub_dir, images))
+                    # print(image_group)
+    return image_groups
+
+class OpenTOImageDataset(Dataset):
+    def __init__(self, openTO_individual_dataset , augment):
+        
+        self.individual_img_dirs = create_individual_images(openTO_individual_dataset)
+        self.augment = augment
+        self.train_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),
+        ])
+    
+    def __len__(self):
+        return len(self.individual_img_dirs)
+
+    def convert_labels(self,input):
+        input = input.clone()
+        input[input < 115.0] = 0
+        input[input > 200.0] = 2
+        input[(input >= 115.0) & (input <= 200.0)] =1  #since floating point precision might vary
+        return input
+
+    def __getitem__(self, i):
+        img = torchvision.io.decode_image(self.individual_img_dirs[i], torchvision.io.ImageReadMode.GRAY)  # [1,H,W]
+        binary = self.convert_labels(img)
+        images = binary.float()
+        images = F.one_hot(images.long(), num_classes=3)        # [ H, W, 3]
+        print('The shape of images', images.shape)
+        images = images.permute(0,3,1,2).float()      # [1, 3, H, W]
+        images = images.squeeze(0)  # [3, H, W]
+        labels = binary.squeeze(0).long()        
+        print('The unique values in images ', images.unique())
+        print('The unique values in labels', labels.unique())
+        
+        
+        return images, labels
+
 
 
 

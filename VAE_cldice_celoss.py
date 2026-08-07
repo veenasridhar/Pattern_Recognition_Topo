@@ -33,7 +33,7 @@ class VAEGANFineTuner:
         self.PROJECT_NAME = 'Topology Optimization_final'
 
 
-    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=51, lr=0.0001, kl_weight=1e-6, latent_technique = 'learned_aggregation', save_path="./finetuned_vae"):
+    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=101, lr=0.001, kl_weight=1e-6, latent_technique = 'learned_aggregation', save_path="./finetuned_vae"):
 
         # Start a new wandb run to track this script.
         run = wandb.init(
@@ -48,19 +48,16 @@ class VAEGANFineTuner:
                 "learning_rate": lr,
                 #'kl_weight': kl_weight,
                 'latent_technique': latent_technique,
-                'loss': 'CE+CLDice',
-                "architecture": "VAE",
+                'loss': 'CE + clDice',
+                "architecture": "VAE_Decoder training last two layers",
                 "dataset": "OpenTO + TO",
                 "epochs": epochs,
                 "fold": fold,
             }, )
 
         #torch.autograd.set_detect_anomaly(True)
-        save_path = 'output_images_withOpenTOData'
-
-       
-
-
+        save_path = f'VAE TO Dataset Results_{latent_technique}_{fold}_with decoder training_0.3ce+0.7cld'
+        #save_path = 'Pretrained Individual Reconstruction Results'
 
         if self.multi_image_mode:
 
@@ -69,23 +66,23 @@ class VAEGANFineTuner:
                 for p in module.parameters():
                         p.requires_grad = False
 
-            # trainable_modules = [
-            #     self.vae.decoder.up_blocks[2],
-            #     self.vae.decoder.up_blocks[3],   # final upsampling block (highest resolution)
-            #     self.vae.decoder.conv_norm_out,
-            #     self.vae.decoder.conv_out,
-            # ]
-            # for module in trainable_modules:
-            #     for p in module.parameters():
-            #         p.requires_grad = True
+            trainable_modules = [
+                #self.vae.decoder.up_blocks[2],
+                self.vae.decoder.up_blocks[3],   # final upsampling block (highest resolution)
+                self.vae.decoder.conv_norm_out,
+                self.vae.decoder.conv_out,
+            ]
+            for module in trainable_modules:
+                for p in module.parameters():
+                    p.requires_grad = True
 
-            #decoder_optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.vae.decoder.parameters()), lr=lr, weight_decay=1e-2)
+            decoder_optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.vae.decoder.parameters()), lr=lr, weight_decay=1e-4)
             
             if latent_technique == 'learned_aggregation':
-                aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=0.0001, weight_decay=1e-2)
+                aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=0.001, weight_decay=1e-4)
                 print('The training parameters for the aggregation module are',sum(p.numel() for p in self.aggregation_module.parameters() if p.requires_grad))
 
-            # print('The training parameters for the decoder module are',sum(p.numel() for p in self.vae.decoder.parameters() if p.requires_grad))
+            #print('The training parameters for the decoder module are',sum(p.numel() for p in self.vae.decoder.parameters() if p.requires_grad))
             # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(decoder_optimizer, T_max=epochs)
         else:
             optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr, weight_decay=1e-4)
@@ -96,6 +93,7 @@ class VAEGANFineTuner:
         #ce_weights = torch.tensor([0.25, 0.35, 0.5],device=self.device)weight= ce_weights
         ce_loss = torch.nn.CrossEntropyLoss()
         best_loss = float('inf')
+        best_val_loss = float('inf')
 
         for epoch in range(epochs):
             
@@ -128,6 +126,7 @@ class VAEGANFineTuner:
                 for batch, input in enumerate(train_progress_bar):
 
                     images, gt, avg_result = input
+                    print('The image shape is',images.shape)
                     images = images.to(self.device)         # (B,N,C,H,W) = (1,5,3,256,256)
                     target = gt.to(self.device)             # (B,C,H,W) = (1,3,256,256)
 
@@ -197,7 +196,8 @@ class VAEGANFineTuner:
                     member_prob = probs[:, 2:3]
                     member_gt   = (target == 2).float().unsqueeze(1)
                     train_cldice_loss = cldice_loss(member_prob,member_gt)
-                    reconstruction_loss =  0.3 * train_ce_loss + train_cldice_loss * 0.7
+                    reconstruction_loss =  0.3 * train_ce_loss + 0.7 * train_cldice_loss
+                    #reconstruction_loss =  train_cldice_loss
                     #latent_space_exploration(individual_mu, z_averaged, target_mu, self.vae)
 
                     loss = reconstruction_loss
@@ -210,8 +210,8 @@ class VAEGANFineTuner:
                             torch.nn.utils.clip_grad_norm_(self.aggregation_module.parameters(), 1.0)
                             aggregation_module_optimizer.step()
                             aggregation_module_optimizer.zero_grad()
-                        # decoder_optimizer.step()
-                        # decoder_optimizer.zero_grad()
+                        decoder_optimizer.step()
+                        decoder_optimizer.zero_grad()
 
                     #Aggregating the loss values for each step in the epoch to output finally as a epoch loss values
                     train_vae_loss +=loss.item()
@@ -253,43 +253,43 @@ class VAEGANFineTuner:
                         train_iou_dl += iou_dilated
                         train_iou_img_prc += iou_dilated_image_processing
 
-                        # if epoch % 5 == 0:
-                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
-                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
-                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train')):
-                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train'))
-                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}')):
-                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}'))
-                        #     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}', 'Metrics')):
-                        #         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}','Metrics'))
+                        if epoch % 50 == 0 and index<500:
+                            if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
+                                os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
+                            if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train')):
+                                os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train'))
+                            if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}')):
+                                os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}'))
+                            if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}', 'Metrics')):
+                                os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}','Metrics'))
 
-                        #     plt.imsave(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}', f'{save_path}_{index}.png'),
-                        #            reconstructed.detach().cpu().numpy(), cmap='gray', vmin = reconstructed.min(), vmax = reconstructed.max())
+                            # plt.imsave(os.path.join(f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}', f'{save_path}_{index}.png'),
+                            #        reconstructed.detach().cpu().numpy(), cmap='gray', vmin = reconstructed.min(), vmax = reconstructed.max())
                             
-                        #     group = {
-                        #         'inputs': images[i].detach().cpu().numpy(),
-                        #         'gt': target[i].detach().cpu().numpy(),
-                        #         'gt_foreground': gt_binary,
-                        #         'pred': reconstructed.detach().cpu().numpy(),
-                        #         'pred_foreground':predicted_binary,
-                        #         'baseline': avg_result[i].detach().cpu().numpy(),
-                        #         'baseline_foreground':img_prc_binary,
-                        #         'label': f'Batch {index}',
-                        #         # clDice already computed above — just pass them in
-                        #         'cld_pred': cl_dice_dl,
-                        #         'prec_pred': cl_prec,
-                        #         'rec_pred': cl_rec,
-                        #         'cld_base': cl_dice_img_prc,
-                        #         'prec_base': cl_prec_i,
-                        #         'rec_base': cl_rec_i,
-                        #         'iou_base': iou_dilated_image_processing,
-                        #         'iou_pred': iou_dilated
-                        #     }
-                        #     visualize_cldice_comparison_grid_discrete([group], epoch=epoch, batch=index, fold=fold,save_path=f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics')
+                            group = {
+                                'inputs': images[i].detach().cpu().numpy(),
+                                'gt': target[i].detach().cpu().numpy(),
+                                'gt_foreground': gt_binary,
+                                'pred': reconstructed.detach().cpu().numpy(),
+                                'pred_foreground':predicted_binary,
+                                'baseline': avg_result[i].detach().cpu().numpy(),
+                                'baseline_foreground':img_prc_binary,
+                                'label': f'Batch {index}',
+                                # clDice already computed above — just pass them in
+                                'cld_pred': cl_dice_dl,
+                                'prec_pred': cl_prec,
+                                'rec_pred': cl_rec,
+                                'cld_base': cl_dice_img_prc,
+                                'prec_base': cl_prec_i,
+                                'rec_base': cl_rec_i,
+                                'iou_base': iou_dilated_image_processing,
+                                'iou_pred': iou_dilated
+                            }
+                            visualize_cldice_comparison_grid_discrete([group], epoch=epoch, batch=index, fold=fold,save_path=f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics')
                         
-                        #     # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
-                        #     #                  img_proc_dilated_overlap, f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics', index, False)
-                        #     index += 1
+                            # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed[i], images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
+                            #                  img_proc_dilated_overlap, f'./{save_path}_{latent_technique}_{fold}/train/Epoch {epoch}/Metrics', index, False)
+                            index += 1
 
                     # Printing the step loss values in the progress bar
                     train_progress_bar.set_postfix({
@@ -303,8 +303,8 @@ class VAEGANFineTuner:
                         torch.nn.utils.clip_grad_norm_(self.aggregation_module.parameters(), 1.0)
                         aggregation_module_optimizer.step()
                         aggregation_module_optimizer.zero_grad()
-                    # decoder_optimizer.step()
-                    # decoder_optimizer.zero_grad()
+                    decoder_optimizer.step()
+                    decoder_optimizer.zero_grad()
                 
                 #scheduler.step()
         
@@ -318,6 +318,8 @@ class VAEGANFineTuner:
 
                     images = images.to(self.device)
                     target = target.to(self.device)
+
+                    print('The shape of the input images are',images.shape)
 
                     posterior = self.vae.encode(images).latent_dist      #  Posterior - N(mu,std), latent_dist - Encoded outputs of Encoder represented as the mean and logvar of DiagonalGaussianDistribution. DiagonalGaussianDistribution allows for sampling latents from the distribution
                     individual_mu = posterior.mean
@@ -354,18 +356,20 @@ class VAEGANFineTuner:
                     
 
                     if epoch%5 == 0 :
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
-                                os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train')):
-                            os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train'))
-                        if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}')):
-                            os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}'))
+                        if not os.path.exists(os.path.join(save_path)):
+                                os.mkdir(os.path.join(save_path))
+                        if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}'))
+                        if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}/train')):
+                            os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/train'))
+                        if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}/train/Epoch {epoch}')):
+                            os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/train/Epoch {epoch}'))
                         print('The shape of the reconstructed individual image',reconstructed.shape)
                         reconstructed = torch.argmax(reconstructed, dim=1)
-                        visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/train/Epoch {epoch}',False)
-                        
+
+                        if index < 50:
+                            visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/train/Epoch {epoch}',False)
+                        index += 1
                         #latent_space_exploration(individual_mu, None, None, self.vae)
                         #visualize_feature_maps(images, individual_mu, False)
 
@@ -398,6 +402,7 @@ class VAEGANFineTuner:
 
             val_progress_bar = tqdm(val_loader,desc=f'Epoch {epoch}/{epochs}')
             if val_loader:
+                val_index = 0
                 print('The length of val loader', len(val_loader))
                 self.vae.eval()
                 if latent_technique == 'learned_aggregation':
@@ -468,7 +473,8 @@ class VAEGANFineTuner:
                             member_prob = probs[:, 2:3]
                             member_gt   = (target == 2).float().unsqueeze(1)
                             val_cldice_loss = cldice_loss(member_prob,member_gt)
-                            reconstruction_val_loss =  0.3* val_ce_loss + val_cldice_loss * 0.7
+                            reconstruction_val_loss = 0.3 * val_ce_loss + 0.7 * val_cldice_loss
+                            #reconstruction_val_loss = val_cldice_loss
 
                             val_loss = reconstruction_val_loss
 
@@ -511,7 +517,8 @@ class VAEGANFineTuner:
                                 val_iou_dl += iou_dilated
                                 val_iou_img_prc += iou_dilated_image_processing
 
-                                if epoch % 1 == 0:
+                                if val_vae_loss < best_val_loss and index<500:
+                                    best_val_loss = val_vae_loss
                                     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
                                         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
                                     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}/val')):
@@ -580,18 +587,20 @@ class VAEGANFineTuner:
                             val_loss = recon_loss + kl_weight * kl_loss + val_cldice_loss
 
                             if epoch%5 == 0 :
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
-                                        os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}'))
+                                if not os.path.exists(os.path.join(f'{save_path}')):
+                                        os.mkdir(os.path.join(f'{save_path}'))
+                                if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}'))
+                                if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}/val')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/val'))
+                                if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}/val/Epoch {epoch}')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/val/Epoch {epoch}'))
                                 print('The shape of the reconstructed individual image',reconstructed.shape)
                                 reconstructed = torch.argmax(reconstructed, dim=1)
-                                visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/val/Epoch {epoch}',False)
-                        
+                                if val_index < 50:
+                                    visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/val/Epoch {epoch}',False)
+                                val_index += 1
+
                                 # latent_space_exploration(individual_mu, None, None, self.vae)
                                 # visualize_feature_maps(images, individual_mu, False)
 
@@ -693,8 +702,9 @@ class VAEGANFineTuner:
                             member_prob = probs[:, 2:3]
                             member_gt   = (target == 2).float().unsqueeze(1)
                             test_cldice_loss = cldice_loss(member_prob,member_gt)
-                            reconstruction_loss =  test_ce_loss + test_cldice_loss
-                            reconstruction_test_loss =  0.3* test_ce_loss + test_cldice_loss * 0.7
+                            #reconstruction_loss =  test_ce_loss + test_cldice_loss
+                            reconstruction_test_loss = 0.3 * test_ce_loss + 0.7 * test_cldice_loss
+                            #reconstruction_test_loss = test_cldice_loss
                             #reconstruction_test_loss = mse_loss(reconstructed, target)
 
                             t_loss = reconstruction_test_loss
@@ -734,7 +744,7 @@ class VAEGANFineTuner:
                                 test_iou_dl += iou_dilated
                                 test_iou_img_prc += iou_dilated_image_processing
 
-                                if epoch % 1 == 0:
+                                if test_vae_loss<best_loss and index<500:
                                 
                                     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
                                         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
@@ -811,18 +821,19 @@ class VAEGANFineTuner:
                             t_loss = recon_loss + kl_weight * kl_loss + test_cldice_loss
 
                             if epoch%5 == 0 :
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results')):
-                                        os.mkdir(os.path.join(f'./Individual Reconstruction Results'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test'))
-                                if not os.path.exists(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}')):
-                                    os.mkdir(os.path.join(f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}'))
+                                if not os.path.exists(os.path.join(save_path)):
+                                        os.mkdir(os.path.join(f'{save_path}'))
+                                if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}'))
+                                if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}/test')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/test'))
+                                if not os.path.exists(os.path.join(f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}')):
+                                    os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}'))
                                 print('The shape of the reconstructed individual image',reconstructed.shape)
                                 reconstructed = torch.argmax(reconstructed, dim=1)
-                                visulaize_images_individual(batch,epoch, reconstructed, target,None, f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/Epoch {epoch}',False)
-                        
+                                if index < 50:
+                                    visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}',False)
+                                index += 1
 
                             test_vae_loss += t_loss.item()
                             test_mse_loss += recon_loss.item()
