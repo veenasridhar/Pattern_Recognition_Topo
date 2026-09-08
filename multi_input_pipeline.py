@@ -88,29 +88,14 @@ def create_image_groups(image_directory):
 
 class ImageDataset(Dataset):
     def __init__(self, subbatch_dirs, idx, augment,
-                 p_flip=0.5,            # prob of group-consistent horizontal flip (GT flipped too)
-                 p_corrupt=0.5,         # prob of corrupting a minority of views (GT unchanged)
-                 max_corrupted_views=2, # never corrupt more than 2 of 5 -> majority stays intact
-                 n_patches=(1, 3),      # patches per corrupted view (min, max)
-                 patch_frac=(0.08, 0.25),  # patch side length as fraction of H/W (min, max)
-                 noise_std=(0.05, 0.20)):  # Gaussian noise strength range
+                 p_flip=0.5            # prob of group-consistent horizontal flip (GT flipped too)
+                ):
         self.subbatch_dirs = subbatch_dirs
         self.indices = idx
         self.augment = augment
- 
         self.p_flip = p_flip
-        self.p_corrupt = p_corrupt
-        self.max_corrupted_views = max_corrupted_views
-        self.n_patches = n_patches
-        self.patch_frac = patch_frac
-        self.noise_std = noise_std
- 
-        # Base transforms (applied to images, labels, avg_output alike).
-        # All random augmentations are done manually in __getitem__ so that
-        # group-consistency (flip) vs. per-view (corruption) is explicit.
         self.base_transformations = v2.Compose([
             v2.ToDtype(torch.float32, scale=True),   # scales to [0,1]
-            #v2.Grayscale(num_output_channels=3),     # Only for VAE approach
         ])
  
     def __len__(self):
@@ -119,8 +104,8 @@ class ImageDataset(Dataset):
     def to_label_map(self,gray):                     # gray: [..., 1, H, W] uint8
         g = gray.squeeze(-3).long()             # [..., H, W]
         lm = torch.ones_like(g)                 # default: non-design (1)
-        lm[g < 64]   = 0                        # void
-        lm[g >= 192] = 2                        # structural member
+        lm[g < 64]   = 0                        # void (0)
+        lm[g >= 192] = 2                        # structural member (2)
         return lm
 
     # ------------------------------------------------------------------
@@ -130,42 +115,12 @@ class ImageDataset(Dataset):
         """Horizontal flip applied consistently to ALL views + GT + avg output."""
         images = torch.flip(images, dims=[-1])
         return images
- 
-    def _corrupt_minority_views(self, images):
-        """Corrupt 1..max_corrupted_views randomly chosen views with random
-        patch masking or Gaussian noise. GT stays unchanged: with <=2 of 5
-        views corrupted, the (majority) consensus is preserved.
-        images: [N, C, H, W] float in [0,1]."""
-        n_views = images.shape[0]
-        k = random.randint(1, self.max_corrupted_views)
-        view_ids = torch.randperm(n_views)[:k].tolist()
-        H, W = images.shape[-2:]
- 
-        for v_idx in view_ids:
-            mode = random.choice(['mask', 'noise'])
-            if mode == 'mask':
-                for _ in range(random.randint(*self.n_patches)):
-                    ph = max(1, int(H * random.uniform(*self.patch_frac)))
-                    pw = max(1, int(W * random.uniform(*self.patch_frac)))
-                    y = random.randint(0, H - ph)
-                    x = random.randint(0, W - pw)
-                    # fill 0.0 = delete material (background),
-                    # fill 1.0 = add fake material (structural member)
-                    fill = random.choice([0.0, 1.0])
-                    images[v_idx, :, y:y + ph, x:x + pw] = fill
-            else:  # 'noise'
-                std = random.uniform(*self.noise_std)
-                noise = torch.randn_like(images[v_idx]) * std
-                images[v_idx] = (images[v_idx] + noise).clamp(0.0, 1.0)
-        return images
- 
     # ------------------------------------------------------------------
     def __getitem__(self, i):
         index = self.indices[i]
         sub_dir = self.subbatch_dirs[index]
         print(sub_dir)
         sub = (sub_dir.split('/')[-1]).split(' ')[-1]
- 
         img = torchvision.io.decode_image(self.subbatch_dirs[index], torchvision.io.ImageReadMode.GRAY)  # [1,H,W]
        
         image_labels  = self.to_label_map(img)        # [1, H, W] long
@@ -179,11 +134,6 @@ class ImageDataset(Dataset):
         #     # 1) Group-consistent geometric transform: GT must follow
         #     if random.random() < self.p_flip:
         #         images = self._group_flip(images, labels, avg_output)
- 
-            # # 3) Minority-view corruption: GT unchanged (majority preserved)
-            # if random.random() < self.p_corrupt:
-            #     images = self._corrupt_minority_views(images)
- 
         return images, target
 
 class TopoDataset_Augmented(Dataset):
@@ -346,7 +296,7 @@ def input_pipeline_discretevals(data_directory, individual_directory,
     return train,val,test
 
 
-class OpenTOConsensusDatasetdisc(Dataset):
+class OpenTOConsensusDatasetdisc(Dataset):                          # For stability AI VAE with onehot inputs.
     def __init__(self,image_groups, ground_truth_dir, img_prc_dir, augment):
         self.subbatch_dirs = image_groups
         self.ground_truth_dir = ground_truth_dir
@@ -422,6 +372,37 @@ class OpenTOConsensusDatasetdisc(Dataset):
 
 
 
+class OpenTOVAEImageDataset(Dataset):
+    def __init__(self, openTO_individual_dataset , augment):
+        
+        self.individual_img_dirs = create_individual_images(openTO_individual_dataset)
+        self.augment = augment
+        self.train_transformations = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),
+        ])
+    
+    def __len__(self):
+        return len(self.individual_img_dirs)
+
+    def convert_labels(self,input):
+        input = input.clone()
+        input[input < 115.0] = 0
+        input[input > 200.0] = 2
+        input[(input >= 115.0) & (input <= 200.0)] =1  #since floating point precision might vary
+        return input
+
+    def __getitem__(self, i):
+        img = torchvision.io.decode_image(self.individual_img_dirs[i], torchvision.io.ImageReadMode.GRAY)  # [1,H,W]
+        binary = self.convert_labels(img)
+        images = binary.long()
+        images = F.one_hot(images, num_classes=3)        # [1, H, W, 3]
+        images = images.permute(0, 3, 1, 2).squeeze(0).float()      # [1, 3, H, W]
+        labels = binary.squeeze(0).long()        
+        print('The unique values in images ', images.unique())
+        print('The unique values in labels', labels.unique())
+        print('The shape of images', images.shape)
+        
+        return images, labels
 
 
 

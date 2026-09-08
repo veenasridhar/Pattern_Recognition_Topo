@@ -1,11 +1,8 @@
-from __future__ import annotations
-
 import argparse
 import csv
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
 import numpy as np
 from scipy.ndimage import (convolve, distance_transform_edt, gaussian_filter,
                            map_coordinates)
@@ -13,9 +10,6 @@ import skimage
 from skimage.measure import label as cc_label
 from skimage.morphology import disk, skeletonize
 
-# skimage >= 0.26 deprecated binary_dilation/binary_erosion in favour of
-# dilation/erosion (identical result on boolean input). Use whichever the
-# installed version prefers so no deprecation warnings are emitted.
 if tuple(int(x) for x in skimage.__version__.split(".")[:2]) >= (0, 26):
     from skimage.morphology import dilation as _dil, erosion as _ero
     def binary_dilation(image, footprint=None):
@@ -85,7 +79,6 @@ def save_label_map(lm: np.ndarray, path: Path) -> None:
     _save_gray(out, path)
 
 
-# Pillow is imported lazily so the module can be imported without it present.
 def _open_gray(path):
     from PIL import Image
     return Image.open(path).convert("L")
@@ -208,15 +201,15 @@ def _sample_add_mask(lm, rng, radius, avoid=None,
                       0, np.array(lm.shape) - 1)
         stroke = _line_mask(lm.shape, p1, way) | _line_mask(lm.shape, way, p2)
         bar = binary_dilation(stroke, disk(radius))
-        if (bar & nd).any():                       # touches gray -> reject
-            continue
-        if keepout is not None and (bar & keepout).any():
-            continue
-        novel = bar & ~member
-        if not void[novel].all():                  # every new px must be black
-            continue
-        if novel.sum() < 0.5 * bar.sum():          # mostly re-painting -> boring
-            continue
+        # if (bar & nd).any():                       # touches gray -> reject
+        #     continue
+        # if keepout is not None and (bar & keepout).any():
+        #     continue
+        # novel = bar & ~member
+        # if not void[novel].all():                  # every new px must be black
+        #     continue
+        # if novel.sum() < 0.5 * bar.sum():          # mostly re-painting -> boring
+        #     continue
         return bar
     return None
 

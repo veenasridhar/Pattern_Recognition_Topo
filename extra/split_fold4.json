@@ -10,14 +10,14 @@
     "gen WK Top",
     "gn WK Bottom"
   ],
-  "test": [
+  "val": [
     "Anowas V4 Top",
     "Bottom View V3",
     "Front View V3",
     "Intermediate Floor V3",
     "Rear View MW"
   ],
-  "val": [
+  "test": [
     "Bottom View MW",
     "Jermias Side",
     "Jermias_bottom",

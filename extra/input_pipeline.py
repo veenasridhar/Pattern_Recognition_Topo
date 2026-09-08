@@ -155,79 +155,6 @@ class TopoDatasetImg(Dataset):
         #sdf = torch.from_numpy(np.load(os.path.join('data/Final Data/Batches Image Processing', f'sdf_{sub}.npy'))).float()
         return images, labels, avg_output
 
-# class OpenTOConsensusDatasetdisc(Dataset):
-#     def __init__(self,image_groups, ground_truth_dir, img_prc_dir, augment):
-#         self.subbatch_dirs = image_groups
-#         self.ground_truth_dir = ground_truth_dir
-#         self.img_proc_dir = img_prc_dir
-#         self.augment = augment
-#         self.base_transformations = v2.Compose([
-#             v2.ToDtype(torch.float32, scale=True),   # scales to [0,1]
-#             v2.Grayscale(num_output_channels=3),     # Only for VAE approach
-#         ])
-    
-#     def __len__(self):
-#         return len(self.subbatch_dirs)
-    
-#     def to_label_map(self,gray):                     # gray: [..., 1, H, W] uint8
-#             g = gray.squeeze(-3).long()             # [..., H, W]
-#             lm = torch.ones_like(g)                 # default: non-design (1)
-#             lm[g < 64]   = 0                        # void
-#             lm[g >= 192] = 2                        # structural member
-#             return lm
-
-#     def __getitem__(self, i):
-#         sub_dir = self.subbatch_dirs[i]
-#         print(sub_dir)
-#         sub = (sub_dir[0].split('/')[-2]).split(' ')[-1]
-#         print(sub)
-#         #sub = i
-
-#         print(sub_dir, sub)
-#         #image_files = sorted(glob.glob(os.path.join(sub_dir, '*.png')))  # the 5 images
-#         images = torch.cat(
-#             [torchvision.io.decode_image(f, torchvision.io.ImageReadMode.GRAY)
-#              for f in sub_dir], dim=0)  # [5, 1, H, W]
-#         labels = torchvision.io.decode_image(
-#             os.path.join(self.ground_truth_dir, f'gt {sub}.png'),
-#             torchvision.io.ImageReadMode.GRAY)
-#         avg_output = torchvision.io.decode_image(
-#             os.path.join(self.img_proc_dir, f'result_{sub}.png'),
-#             torchvision.io.ImageReadMode.GRAY)
-        
-#         print('TO Dataset labels',labels.unique())
-        
-#         image_labels  = self.to_label_map(images).float()        # [5, H, W] long
-#         label_map    = self.to_label_map(labels)         # [H, W]    long
-#         avg_label    = self.to_label_map(avg_output)     # [H, W]    long
-
-#         #images = image_labels
-        
-#         # ---- encoder input: one-hot, scaled to [-1, 1] ----
-#         #images = F.one_hot(image_labels, num_classes=3)        # [5, H, W, 3]
-#         #images = images.permute(0, 3, 1, 2).float()      # [5, 3, H, W]
-#         # print('The shape of the images', images.shape)
-#         # print('The type of the images', images.dtype)
-        
-#         # Deterministic base transforms for everything
-#         # images = self.base_transformations(images)
-#         # labels = self.base_transformations(labels)
-#         # avg_output = self.base_transformations(avg_output)
- 
-#         # if self.augment:
-#         #     # 1) Group-consistent geometric transform: GT must follow
-#         #     if random.random() < self.p_flip:
-#         #         images, labels, avg_output = self._group_flip(images, labels, avg_output)
- 
-#         #     # 2) View permutation: GT unchanged (consensus is a set operation)
-#         #     if random.random() < self.p_permute:
-#         #         images = self._permute_views(images)
- 
-#         #     # 3) Minority-view corruption: GT unchanged (majority preserved)
-#         #     if random.random() < self.p_corrupt:
-#         #         images = self._corrupt_minority_views(images)
- 
-#         return image_labels, label_map , avg_label
 
 class TopoDataset(Dataset):
     def __init__(self, subbatch_dirs, idx, ground_truth_dir, img_proc_dir ,augment):
@@ -454,26 +381,6 @@ def input_pipeline_vae(data_directory, ground_truth_dir, image_processing_dir, f
         test_dataset = TopoDataset_Augmented(items, test_idx, ground_truth_dir, image_processing_dir, augment=False)
 
     return train_dataset,val_dataset,test_dataset
-
-
-class OpenTODataset(Dataset):
-    def __init__(self, hf_dataset, transform=None):
-        self.ds = hf_dataset
-        self.transform = v2.Compose([
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Grayscale(num_output_channels=3),
-            v2.ToTensor(),
-        ])
-    def __len__(self):
-        return len(self.ds)
-
-    def __getitem__(self, idx):
-        img = self.ds[idx]["topology"]
-        if img.mode != "L":     #Checks if the images are grayscale
-            img = img.convert("L")
-        image_tensor = self.transform(img)
-        #print('The typeof image', type(image_tensor))
-        return image_tensor, image_tensor
 
 def natural_sort_key(s):
     # Splits "Batch 11" into ["Batch ", 11] so sorting is numeric-aware

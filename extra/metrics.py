@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from skimage.morphology import skeletonize
 #import gudhi
 
 
@@ -86,6 +87,7 @@ def extract_red_mask(image):
     return mask.astype(float)
 
 def extract_foreground_mask(image):
+    #image_expanded = np.expand_dims(image,2)
     channels = (image.shape)[-1]
     print(channels)
     if channels == 1:
@@ -95,23 +97,63 @@ def extract_foreground_mask(image):
         R = image[:, :, 0]
         G = image[:, :, 1]
         mask = (R < 0.2)
+    else:
+        R = image
+        mask = (R ==1)
+    print(mask.shape)
     return mask.astype(float)
 
-def iou_metrics(extracted_structures, gt,tolerance=3):
+def cl_score(skeleton, mask):
+    """Fraction of `skeleton` pixels that lie inside `mask`. None if skeleton is empty."""
+    denom = skeleton.sum()
+    if denom == 0:
+        return None
+    return float((skeleton & mask).sum()) / float(denom)
 
-    #Extrract only the red structures because the background is irrelevant and inflates the metrics
-    #extracted_structures =extracted_structures.astype(float)/255.0
-    red_extracted_structures = extract_foreground_mask(extracted_structures[:,:,::-1])
-    #gt = gt.astype(float)/255.0
-    print(gt.shape)
-    red_mask_gt = extract_foreground_mask(gt)
+def cldice_metrics(extracted_structures, gt):
+    # --- binarize BOTH sides the same way (this is where your IoU version drifted) ---
+    pred_mask = extracted_structures.astype(bool)
+    gt_mask   = gt.astype(bool)        # <-- match this to your actual GT encoding
+    # if gt is 3-ch white-on-black: gt_mask = np.asarray(gt)[..., 0] > 0.5
 
-    # cv2.imshow('Red extracted_structures',red_extracted_structures)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
-    # cv2.imshow('Red Mask GT',red_mask_gt)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    skel_pred = skeletonize(pred_mask)
+    print('The shape of skel_pred',skel_pred.shape)
+    plt.imsave('Pred skeleton.png',skel_pred.squeeze(2))
+    
+    skel_gt   = skeletonize(gt_mask)
+    print('The shape of gt_skel',skel_gt.shape)
+    plt.imsave('gt skeleton.png',skel_gt)
+
+    clP = cl_score(skel_pred, np.expand_dims(gt_mask,2))        # predicted centerline supported by GT volume
+    clR = cl_score(np.expand_dims(skel_gt,2),   pred_mask)      # GT centerline captured by predicted volume
+
+    print('clp',clP,'clr',clR)
+    if clP is None and clR is None:
+        return 1.0, 1.0, 1.0                  # both empty -> perfect agreement
+    clP = 0.0 if clP is None else clP
+    clR = 0.0 if clR is None else clR
+    if clP + clR == 0:
+        return 0.0, clP, clR
+
+    cldice = 2.0 * clP * clR / (clP + clR)
+    print('clDice', cldice, '| clP', clP, '| clR', clR)
+    return cldice
+
+def iou_metrics(extracted_structures, gt,tolerance=0):
+
+    # #Extrract only the red structures because the background is irrelevant and inflates the metrics
+    # #extracted_structures =extracted_structures.astype(float)/255.0
+    # red_extracted_structures = extract_foreground_mask(extracted_structures)
+    # plt.imsave('Extracted structures.png',red_extracted_structures)
+    # #gt = gt.astype(float)/255.0
+    # print('The gt shape',gt.shape)
+    # red_mask_gt = gt
+    # print('The red maks gt',red_mask_gt.shape)
+    # plt.imsave('GT Mask.png',red_mask_gt)
+    red_extracted_structures = extracted_structures.squeeze(-1)
+    print('Extracted Structures shape',red_extracted_structures.shape,np.unique(red_extracted_structures))
+    red_mask_gt = gt
+    print('GT shape',red_mask_gt.shape,np.unique(red_mask_gt))
 
     if tolerance>0:
         r = tolerance
@@ -125,19 +167,25 @@ def iou_metrics(extracted_structures, gt,tolerance=3):
         target_dilated_structure = red_mask_gt
 
     TP = (predicted_dilated_structure * target_dilated_structure).sum()
+    print('TP',TP)
     FP = (predicted_dilated_structure * (1 - target_dilated_structure)).sum()
+    print('FP',FP)
     FN = ((1 - predicted_dilated_structure) * target_dilated_structure).sum()
+    print('FN',FN)
 
-    dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
-    dilated_overlap[..., 0] = (predicted_dilated_structure > 0) & (target_dilated_structure == 0)  # FP = red
-    dilated_overlap[..., 1] = (predicted_dilated_structure > 0) & (target_dilated_structure > 0)  # TP = green
-    dilated_overlap[..., 2] = (predicted_dilated_structure == 0) & (target_dilated_structure > 0)  # FN = blue
+    # dilated_overlap = np.zeros((*red_extracted_structures.shape, 3))
+    # dilated_overlap[..., 0] = (predicted_dilated_structure > 0) & (target_dilated_structure == 0)  # FP = red
+    # dilated_overlap[..., 1] = (predicted_dilated_structure > 0) & (target_dilated_structure > 0)  # TP = green
+    # dilated_overlap[..., 2] = (predicted_dilated_structure == 0) & (target_dilated_structure > 0)  # FN = blue
 
 
     iou_dilated = TP / (TP + FP + FN + 1e-8)
     print('IoU Dilated',iou_dilated)
 
-    return iou_dilated,dilated_overlap
+    cldice = cldice_metrics(extracted_structures,gt)
+    print('cldice',cldice)
+
+    return iou_dilated, cldice
 
 def compute_betti_numbers(image):
 

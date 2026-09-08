@@ -20,7 +20,7 @@ import numpy as np
 import os
 
 
-def make_tpfnfp_overlay(pred_mask, gt_mask, structure_val=2):
+def make_tpfnfp_overlay(pred_mask, gt_mask, structure_val=1):
     H, W   = pred_mask.shape
     print(np.unique(gt_mask))
     canvas = np.stack([gt_mask, gt_mask, gt_mask], axis=-1).astype(np.float32) / 2.0
@@ -36,8 +36,8 @@ def mask_to_rgb(mask, structure_val=2):
     H, W   = mask.shape
     print(mask.shape)
     canvas = np.zeros((H, W, 3), dtype=np.float32)
-    canvas[mask == 1] = [0.45, 0.45, 0.45]
-    canvas[mask == 2] = [1.00, 1.00, 1.00]
+    #canvas[mask == 1] = [0.45, 0.45, 0.45]
+    canvas[mask == 1] = [1.00, 1.00, 1.00]
     return canvas
 
 
@@ -118,7 +118,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
 
         # ── Col 1: GT spans rows 0-1, hidden rows 2-3 ──
         ax_gt = fig.add_subplot(inner_gs[1:3, 1])
-        ax_gt.imshow(gt_rgb)
+        ax_gt.imshow(gt_rgb, cmap='gray')
         ax_gt.set_xticks([]); ax_gt.set_yticks([])
         for spine in ax_gt.spines.values():
             spine.set_visible(False)
@@ -131,7 +131,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
 
         # ── Col 2: pred rows 0-1 | overlay rows 2-3 with metrics as xlabel ──
         ax_pred = fig.add_subplot(inner_gs[0:2, 2])
-        ax_pred.imshow(pred_rgb)
+        ax_pred.imshow(pred_rgb, cmap='gray')
         ax_pred.set_xticks([]); ax_pred.set_yticks([])
         for spine in ax_pred.spines.values():
             spine.set_visible(False)
@@ -154,7 +154,7 @@ def visualize_comparison_with_overlay(groups, structure_val=2, save_path=None, b
 
         # ── Col 3: baseline rows 0-1 | overlay rows 2-3 with metrics as xlabel ──
         ax_base = fig.add_subplot(inner_gs[2:4, 2])
-        ax_base.imshow(base_rgb)
+        ax_base.imshow(base_rgb, cmap='gray')
         ax_base.set_xticks([]); ax_base.set_yticks([])
         for spine in ax_base.spines.values():
             spine.set_visible(False)
@@ -254,7 +254,7 @@ def plot2_overlay(
     )
 
     # ── Col 0: GT ──
-    axes[0].imshow(gt, cmap='gray', vmin=0, vmax=2, aspect='auto')
+    axes[0].imshow(gt, cmap='gray', vmin=0, vmax=1, aspect='auto')
     axes[0].set_title("Ground Truth", fontsize=14, fontweight='bold', pad=5)
     _remove_spines(axes[0])
 

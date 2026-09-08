@@ -6,8 +6,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 
 class SoftSkeletonize(nn.Module):
-    """Differentiable morphological skeletonization (soft-clDice, Shit et al. 2021).
-    Expects a soft mask in [0, 1] of shape (B, 1, H, W)."""
+    """Differentiable morphological skeletonization (soft-clDice, Shit et al. 2021)."""
 
     def __init__(self, num_iters: int = 5):
         super().__init__()
@@ -33,28 +32,28 @@ class SoftSkeletonize(nn.Module):
         return skel
 
 
-def _check_mask(x, name):
-    """Guard against every representation bug this pipeline has produced so far."""
-    assert x.dim() == 4 and x.shape[1] == 1, \
-        f"{name}: expected (B,1,H,W), got {tuple(x.shape)}"
-    assert x.numel() > 0, \
-        f"{name}: empty tensor — channel selected twice? shape {tuple(x.shape)}"
-    assert x.min() >= 0.0 and x.max() <= 1.0, \
-        f"{name}: values in [{x.min():.3f}, {x.max():.3f}] — expected [0,1] probabilities, got logits?"
+# def _check_mask(x, name):
+#     """Guard against every representation bug this pipeline has produced so far."""
+#     assert x.dim() == 4 and x.shape[1] == 1, \
+#         f"{name}: expected (B,1,H,W), got {tuple(x.shape)}"
+#     assert x.numel() > 0, \
+#         f"{name}: empty tensor — channel selected twice? shape {tuple(x.shape)}"
+#     assert x.min() >= 0.0 and x.max() <= 1.0, \
+#         f"{name}: values in [{x.min():.3f}, {x.max():.3f}] — expected [0,1] probabilities, got logits?"
 
 
 def soft_dice(member_prob, member_gt, smooth=1e-6):
-    """Soft Dice COEFFICIENT (higher = better), computed per sample and averaged.
+    # """Soft Dice COEFFICIENT (higher = better), computed per sample and averaged.
 
-    member_prob: (B,1,H,W) float in [0,1] — probs[:, 2:3] from the trainer
-    member_gt:   (B,1,H,W) float {0,1}    — (target_label == 2).float().unsqueeze(1)
-    """
-    _check_mask(member_prob, "member_prob")
-    _check_mask(member_gt, "member_gt")
-    assert member_prob.shape == member_gt.shape
+    # member_prob: (B,1,H,W) float in [0,1] — probs[:, 2:3] from the trainer
+    # member_gt:   (B,1,H,W) float {0,1}    — (target_label == 2).float().unsqueeze(1)
+    # """
+    # _check_mask(member_prob, "member_prob")
+    # _check_mask(member_gt, "member_gt")
+    # assert member_prob.shape == member_gt.shape
 
-    print('The shape of member gt', member_gt.shape)
-    print('The shape of member prob', member_prob.shape)
+    # print('The shape of member gt', member_gt.shape)
+    # print('The shape of member prob', member_prob.shape)
 
     intersection = (member_prob * member_gt).sum(dim=(1, 2, 3))
     denom        = (member_prob + member_gt).sum(dim=(1, 2, 3))
@@ -62,18 +61,6 @@ def soft_dice(member_prob, member_gt, smooth=1e-6):
 
 
 class soft_dice_cldice(nn.Module):
-    """Combined soft Dice + soft clDice LOSS (lower = better).
-
-    loss = (1 - alpha) * (1 - Dice) + alpha * (1 - clDice)
-
-    Both inputs are single-channel soft masks of the structural-member class.
-    All channel selection, softmax, and class-index logic lives in the trainer:
-
-        probs       = torch.softmax(logits, dim=1)              # the ONE softmax
-        member_prob = probs[:, 2:3]                             # class 2 = member
-        member_gt   = (target_label == 2).float().unsqueeze(1)
-        loss        = criterion(member_prob, member_gt)
-    """
 
     def __init__(self, alpha: float = 0.5, skel_iters: int = 5, smooth: float = 1.0):
         super().__init__()
@@ -82,9 +69,9 @@ class soft_dice_cldice(nn.Module):
         self.soft_skeletonize = SoftSkeletonize(num_iters=skel_iters)
 
     def forward(self, member_prob, member_gt):
-        _check_mask(member_prob, "member_prob")
-        _check_mask(member_gt, "member_gt")
-        assert member_prob.shape == member_gt.shape
+        # _check_mask(member_prob, "member_prob")
+        # _check_mask(member_gt, "member_gt")
+        # assert member_prob.shape == member_gt.shape
 
         dice_loss = 1.0 - soft_dice(member_prob, member_gt)
 

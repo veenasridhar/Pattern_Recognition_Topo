@@ -25,6 +25,8 @@ def extract_foreground_mask(image):
         channel3 = image[:,:,2]
         print('The unique values of channel 1 ',np.unique(channel1))
         mask = (channel1 >= 0.65) & (channel2  >= 0.65) & (channel3 >= 0.65)
+    else:
+        mask = (image ==1)
     return mask.astype(float)
 
 
@@ -205,14 +207,11 @@ def visulaize_images(multi_image_mode, batch, epoch, reconstructed_image, origin
 
 def visulaize_images_individual(batch,epoch, reconstructed_image, original, gt_image, save_path, index,test=False):
 
-    # reconstructed_image = torch.clamp(reconstructed_image, 0, 1)
-    # original = torch.clamp(original, 0, 1)
-
     num_images = reconstructed_image.shape[0]
     fig, axes = plt.subplots(2, num_images, figsize=(16, 8))
     # Original Image
     if num_images == 1:
-        orig_img = original[0]*0.5
+        orig_img = original[0]
         orig_img = orig_img.squeeze(-1).detach().cpu().numpy()
         axes[0].imshow(orig_img, cmap='gray',vmin = orig_img.min(), vmax = orig_img.max())
         axes[0].set_title(f'Original {0 + 1}')
@@ -223,9 +222,9 @@ def visulaize_images_individual(batch,epoch, reconstructed_image, original, gt_i
         recon_images = reconstructed_image.permute(1, 2, 0).detach().cpu().numpy()
         print('The shape of the reconstructed image',recon_images.shape)
         axes[1].imshow(recon_images,cmap='gray',vmin= recon_images.min(), vmax = recon_images.max())
-        # iou_metric, overlap_image = iou_metrics(recon_images, orig_img, tolerance=0)
-        # axes[1].set_title(f'IoU Metric {iou_metric:.2f}')
-        # axes[1].axis('off')
+        iou, cld_metric = iou_metrics(recon_images, orig_img, tolerance=0)
+        axes[1].set_title(f'IoU: {iou:.2f}, clDice {cld_metric:.2f}')
+        axes[1].axis('off')
     else:
         for j in range(num_images):
             orig_img = original[j].permute(1, 2, 0).detach().cpu().numpy()
@@ -237,12 +236,13 @@ def visulaize_images_individual(batch,epoch, reconstructed_image, original, gt_i
             #recon_images = reconstructed_image[j].detach().cpu().numpy()
             recon_images = reconstructed_image[j].permute(1, 2, 0).detach().cpu().numpy()
             axes[1, j].imshow(recon_images,cmap='gray')
-            iou_metric,overlap_image = iou_metrics(recon_images, orig_img,tolerance=0)
-            axes[1, j].set_title(f'IoU Metric {iou_metric:.2f}')
+            cld_metric,overlap_image = iou_metrics(recon_images, orig_img,tolerance=0)
+            axes[1, j].set_title(f'clDice {cld_metric:.2f}')
             axes[1, j].axis('off')
     plt.tight_layout()
     plt.savefig(os.path.join(save_path,f'reconstructed_{epoch}_{batch}.png'), dpi=150)
     plt.close()
+    #return cld_metric
 
 
 
@@ -499,35 +499,52 @@ def visualize_feature_maps(images, feature_maps, reconstructed, averaged_mu,mult
 
 
 
+def plot_grid(images, ncols=5, cell_width=2.4, gap=0.02,
+              cmap="gray", vmin=None, vmax=None, save_path=None, dpi=200):
+    """Tight image grid that adapts to the panels' own aspect ratio.
+ 
+    images : (N,H,W), (N,H,W,3) or list of 2D/3D arrays.
+    The two things that remove whitespace:
+      1. figure height is derived from H/W, so each cell matches the image
+         aspect -> no letterboxing.
+      2. aspect='auto' makes each image fill its cell exactly.
+    """
+    imgs = [np.asarray(im) for im in images]
+    H, W = imgs[0].shape[:2]
+    n = len(imgs)
+    nrows = math.ceil(n / ncols)
+ 
+    cell_h = cell_width * H / W                 # match panel aspect
+    fig_w = ncols * cell_width
+    fig_h = nrows * cell_h
+ 
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h))
+    axes = np.atleast_1d(axes).ravel()
+ 
+    for k, ax in enumerate(axes):
+        if k < n:
+            ax.imshow(imgs[k], cmap=cmap, vmin=vmin, vmax=vmax,
+                      aspect="auto", interpolation="nearest")
+        ax.axis("off")
+ 
+    # zero outer margin, tiny inner gap
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=gap, hspace=gap)
+    if save_path:
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight", pad_inches=0)
+    return fig
 
-
-def latent_space_exploration(individual_mu, averaged_mu,target_mu,model):
-    print('Latent exploration')
-
-    for i in range(1):
-        fig1, ax1 = plt.subplots(5,5,figsize = (16,8))
-        fig1.suptitle('Latent Figures')
-        start_index = i * 5
-        end_index = start_index + 5
-        individual_latents_2d, pca = get_latent_plot(individual_mu[start_index:end_index],averaged_mu[i], target_mu[i])
-        #individual_latents_2d,pca = visualize_latent_space_individual(individual_mu)
-        # Moving around in the learned manifold of the averaged latent space
-        for i,x_val in enumerate(np.linspace(individual_latents_2d[:,0].min(), individual_latents_2d[:,0].max(), 5)):
-            for j,y_val in enumerate(np.linspace(individual_latents_2d[:,1].min(), individual_latents_2d[:,1].max(), 5)):
-                print('The xval and yval is ',x_val,y_val)
-                z_inversed = pca.inverse_transform([[x_val,y_val]])
-                z_inversed = torch.tensor(z_inversed,dtype=torch.float32,device= torch.device('cuda'))
-                print('The shape of z_inversed',z_inversed.shape)
-                z_spatial = z_inversed.view(1,*individual_mu.shape[1:])
-                print('The shape of z_inversed', z_spatial.shape)
-                with torch.no_grad():
-                    reconstructed = model.decode(z_spatial).sample
-                print('The shape of the reconstructed',reconstructed.shape)
-                ax1[i,j].imshow(reconstructed[0].permute(1,2,0).detach().cpu().numpy())
-                ax1[i,j].axis('off')
-        plt.tight_layout()
-        plt.savefig(f'latent_space_exploration{i}.png', dpi=150, bbox_inches='tight')
-        plt.close()
+def latent_grid_from_views(mu_corners, model, grid=5,batch=0):
+    """mu_corners: (4,C,H,W) — latents of four views, placed at the corners."""
+    tl, tr, bl, br,extra = mu_corners
+    images = []
+    fig, axes = plt.subplots(grid, grid, figsize=(12, 16))
+    for r, u in enumerate(np.linspace(0, 1, grid)):
+        for c, v in enumerate(np.linspace(0, 1, grid)):
+            z = ((1-u)*((1-v)*tl + v*tr) + u*((1-v)*bl + v*br))
+            with torch.no_grad():
+                img = torch.argmax(model.decode(z[None])[0], dim=0).cpu().numpy()
+                images.append(img)
+    plot_grid(images,save_path= f'latent_reconstruction_{batch}.png')
 
 
 def visualize_agg_feature_map(images, common_feature_map,reconstructed):

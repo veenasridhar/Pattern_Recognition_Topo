@@ -11,20 +11,16 @@ from siamese_network import *
 
 def eval(model):
     #images_path = 'data/batched_data_resized_red/train'
-    image_path = 'Batch 0'
+    image_path = 'data/Batches/Jermias Side/Batch 101'
     #gt_path = './data/eval_images/gt/gt 2.png'
 
     image_stack = []
-    aggregation_module = AttSets(latent_channels=4)
-    mse_loss = torch.nn.MSELoss()
+    checkpoint = torch.load('Custom VAE Results Final/Checkpoints/Custom_VAE_RailwayTO_aggmodule_checkpoint_learned_aggregation_0.pth',weights_only=False)    
+    aggregation_module = checkpoint['aggregation_module']
+    #aggregation_module = AttSets(latent_channels=4)
+    #mse_loss = torch.nn.MSELoss()
     latent_technique = 'averaging'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    test_transformations = v2.Compose([
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Resize((256, 256)),
-            v2.ToTensor(),
-            # v2.Normalize(mean=(0.5,), std= (1.0,)),
-        ])
     aggregation_module = aggregation_module.to(device)
     higher_thresh = []
     # for image_batch in os.listdir(images_path):
@@ -35,7 +31,7 @@ def eval(model):
     input_images = []
     for images in os.listdir(image_path):
         image = torchvision.io.decode_image(os.path.join(image_path,images),torchvision.io.ImageReadMode.RGB)
-        image = test_transformations(image)
+        #image = test_transformations(image)
         # print(image.shape)
         input_images.append(image)
         # input_images.append(image.permute(2,0,1))
@@ -50,7 +46,7 @@ def eval(model):
     images_permuted = images[perm]
     images = torch.unsqueeze(images,0)
     images_permuted = torch.unsqueeze(images_permuted,0)
-    reconstructed = model_evaluation(model,images_permuted,gt=None,batch=0,latent_technique=latent_technique,device=device,permutated=False,aggregation_module = aggregation_module)
+    reconstructed = model_evaluation(model,images,gt=None,batch=0,latent_technique=latent_technique,device=device,permutated=False,aggregation_module = aggregation_module)
         #reconstructed_permutated = model_evaluation(model, images_permuted, gt_image,batch, latent_technique, device, permutated=True,aggregation_module = aggregation_module)
         # print(reconstructed_permutated.shape,reconstructed.shape)
         # diff = mse_loss(reconstructed_permutated,reconstructed)

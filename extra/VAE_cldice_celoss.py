@@ -30,10 +30,10 @@ class VAEGANFineTuner:
         self.aggregation_module = self.aggregation_module.to(device)
         self.vae.to(self.device)
         #self.PROJECT_NAME = 'Individual Reconstruction Cross Validation'
-        self.PROJECT_NAME = 'Topology Optimization_final'
+        self.PROJECT_NAME = 'Masterthesis Curvess'
 
 
-    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=101, lr=0.001, kl_weight=1e-6, latent_technique = 'learned_aggregation', save_path="./finetuned_vae"):
+    def finetune(self, train_loader, val_loader, test_loader,fold, epochs=50, lr=0.001, kl_weight=1e-6, latent_technique = 'learned_aggregation', save_path="./finetuned_vae"):
 
         # Start a new wandb run to track this script.
         run = wandb.init(
@@ -41,7 +41,7 @@ class VAEGANFineTuner:
             entity="veenasridhar96-university-of-stuttgart",
             # Set the wandb project where this run will be logged.
             #project=self.PROJECT_NAME,
-            name = f'Topology Optimization_{latent_technique}_{fold}',
+            name = f'StabilityAI_VAE_Topology Optimization_{latent_technique}_{fold}',
             #job_type= f'run- {fold}',
             # Track hyperparameters and run metadata.
             config={
@@ -49,14 +49,14 @@ class VAEGANFineTuner:
                 #'kl_weight': kl_weight,
                 'latent_technique': latent_technique,
                 'loss': 'CE + clDice',
-                "architecture": "VAE_Decoder training last two layers",
-                "dataset": "OpenTO + TO",
+                "architecture": "StabilityVAE_Consensus Training",
+                "dataset": "TO",
                 "epochs": epochs,
                 "fold": fold,
             }, )
 
         #torch.autograd.set_detect_anomaly(True)
-        save_path = f'VAE TO Dataset Results_{latent_technique}_{fold}_with decoder training_0.3ce+0.7cld'
+        save_path = f'StabilityAIVAE Results/StabilityAIVAE Consensus Training {fold}'
         #save_path = 'Pretrained Individual Reconstruction Results'
 
         if self.multi_image_mode:
@@ -82,10 +82,10 @@ class VAEGANFineTuner:
                 aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=0.001, weight_decay=1e-4)
                 print('The training parameters for the aggregation module are',sum(p.numel() for p in self.aggregation_module.parameters() if p.requires_grad))
 
-            #print('The training parameters for the decoder module are',sum(p.numel() for p in self.vae.decoder.parameters() if p.requires_grad))
+            print('The training parameters for the decoder module are',sum(p.numel() for p in self.vae.decoder.parameters() if p.requires_grad))
             # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(decoder_optimizer, T_max=epochs)
         else:
-            optimizer = torch.optim.AdamW(self.vae.parameters(), lr=lr, weight_decay=1e-4)
+            optimizer = torch.optim.AdamW(self.vae.parameters(), lr=0.0001, weight_decay=1e-4)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
         
@@ -179,7 +179,7 @@ class VAEGANFineTuner:
                         z_averaged = median_mu + median_std_dev * torch.randn_like(median_mu)
 
                     elif latent_technique == 'learned_aggregation':
-                        z_averaged =  self.aggregation_module(individual_mu, sample = False,num_imgs=num_imgs, batch_size=batch_size)
+                        z_averaged, weights =  self.aggregation_module(individual_mu, sample = False,num_imgs=num_imgs, batch_size=batch_size)
 
                     '''if epoch%5 ==0 and batch < 10:
                         visualize_latent_space(individual_mu, combined_mu,target_mu,)'''
@@ -459,7 +459,7 @@ class VAEGANFineTuner:
                                 z_averaged = median_mu + median_std_dev * torch.randn_like(median_mu)
 
                             elif latent_technique == 'learned_aggregation':
-                                 z_averaged =  self.aggregation_module(individual_mu, sample = False, num_imgs=num_imgs, batch_size=batch_size)
+                                 z_averaged, weights =  self.aggregation_module(individual_mu, sample = False, num_imgs=num_imgs, batch_size=batch_size)
 
                             '''if epoch % 5 == 0 and batch < 10:
                                 visualize_latent_space(individual_mu, combined_mu, target_mu,epoch,batch,)'''
@@ -608,14 +608,12 @@ class VAEGANFineTuner:
                             val_mse_loss += recon_loss.item()
                             val_kl_loss += kl_loss.item()
                             val_cldice_loss += val_cldice_loss.item()
-                            #val_ssim_loss += ssim_loss.item()
 
                             # Printing the step loss values in the progress bar
                             val_progress_bar.set_postfix({
                                 'Total Val loss': val_loss.item(),
                                 'Val reconstruction_loss': recon_loss.item(),
                                 'Val KL_loss': kl_loss.item(),
-                                #'Val SSIM Loss': ssim_loss.item()
                             })
 
 
@@ -637,7 +635,7 @@ class VAEGANFineTuner:
             if test_loader:
                 print('The length of test loader',len(test_loader))
                 self.vae.eval()
-                index =0
+                test_index =0
                 with torch.no_grad():
                     if self.multi_image_mode:
                         for batch, input in enumerate(test_progress_bar):
@@ -693,7 +691,7 @@ class VAEGANFineTuner:
                                 z_averaged = averaged_mu + averaged_std_dev * torch.randn_like(averaged_mu)  # (B,C,H,W)
 
                             elif latent_technique == 'learned_aggregation':
-                                 z_averaged =  self.aggregation_module(individual_mu, sample = False,num_imgs=num_imgs, batch_size=batch_size)
+                                 z_averaged,weights =  self.aggregation_module(individual_mu, sample = False,num_imgs=num_imgs, batch_size=batch_size)
 
                             reconstructed = self.vae.decode(z_averaged).sample
 
@@ -744,7 +742,7 @@ class VAEGANFineTuner:
                                 test_iou_dl += iou_dilated
                                 test_iou_img_prc += iou_dilated_image_processing
 
-                                if test_vae_loss<best_loss and index<500:
+                                if test_vae_loss<best_loss and test_index<500:
                                 
                                     if not os.path.exists(os.path.join(f'./{save_path}_{latent_technique}_{fold}')):
                                         os.mkdir(os.path.join(f'./{save_path}_{latent_technique}_{fold}'))
@@ -781,7 +779,7 @@ class VAEGANFineTuner:
                                     
                                     # visulaize_images(self.multi_image_mode, batch, epoch, reconstructed, images[i], target[i], avg_result[i], iou_dilated,iou_dilated_image_processing,dilated_overlap,
                                     #              img_proc_dilated_overlap, f'./{save_path}_{latent_technique}_{fold}/test/Epoch {epoch}/Metrics', index, False)
-                                    index += 1
+                                    test_index += 1
 
 
                             test_progress_bar.set_postfix({
@@ -831,43 +829,37 @@ class VAEGANFineTuner:
                                     os.mkdir(os.path.join(f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}'))
                                 print('The shape of the reconstructed individual image',reconstructed.shape)
                                 reconstructed = torch.argmax(reconstructed, dim=1)
-                                if index < 50:
+                                if test_index < 50:
                                     visulaize_images_individual(batch,epoch, reconstructed, target,None, f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}',False)
-                                index += 1
+                                test_index += 1
 
                             test_vae_loss += t_loss.item()
                             test_mse_loss += recon_loss.item()
                             test_kl_loss += kl_loss.item()
                             test_cldice_loss += test_cldice_loss.item()
-                            #test_ssim_loss += ssim_loss.item()
 
-                            #reconstructed = torch.argmax(reconstructed, dim=1)
-
-                            # if epoch%50 == 0:
-                            #     visulaize_images_individual(batch,epoch, reconstructed, images,None,f'./Individual Reconstruction Results/individual_images_Fold {fold}/test/', True)
-
-                                # Printing the step loss values in the progress bar
+                        
+                            # Printing the step loss values in the progress bar
                             test_progress_bar.set_postfix({
                                 'Test Total loss': t_loss.item(),
                                 'Test Reconstruction_loss': recon_loss.item(),
                                 'KL_loss': kl_loss.item(),
-                                #'SSIM Loss': ssim_loss.item()
                             })
 
             if test_vae_loss < best_loss:
                 best_loss = test_vae_loss
                 if self.multi_image_mode:
-                    torch.save(self.vae, f'./finetuned_vae/VAE_common_structures_checkpoint_{latent_technique}.pth')
-                    self.vae.save_pretrained(f'finetuned_vae/common_structures_recon_{latent_technique}')
+                    torch.save(self.vae, f'StabilityAIVAE Results/StabilityVAE_common_structures_checkpoint_{latent_technique}_{fold}.pth')
+                    self.vae.save_pretrained(f'StabilityAIVAE Results/StabilityVAE_common_structures_recon_{latent_technique}_{fold}')
                     if latent_technique == 'learned_aggregation':
                         torch.save({
                             'vae': self.vae,
                             'aggregation_module': self.aggregation_module,
-                        }, f'./finetuned_vae/checkpoint_{latent_technique}.pth')
+                        }, f'StabilityAIVAE Results/StabilityAIVAE_aggmodule_checkpoint_{latent_technique}_{fold}.pth')
 
                 else:
-                    torch.save(self.vae,'./finetuned_vae/VAE_individual_checkpoint_ce_cldice.pth')
-                    self.vae.save_pretrained('finetuned_vae/individually_trained_models_ce_cldice')
+                    torch.save(self.vae,f'./finetuned_vae/StabilityVAE_TO_individual_checkpoint_ce_cldice_{fold}.pth')
+                    self.vae.save_pretrained(f'finetuned_vae/StabilityVAE_TO_individual_trained_models_ce_cldice_{fold}')
 
                 print(f'Model Saved with test loss {test_vae_loss / len(test_loader):.4f}')
 
