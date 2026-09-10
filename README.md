@@ -20,4 +20,6 @@ extracting recurring structural patterns from multiple TO solutions and provide 
 development of automated consensus identification methods.
 
 To run the program:
-```python main.py```
+```python
+python main.py
+```
