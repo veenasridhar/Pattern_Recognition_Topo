@@ -64,7 +64,7 @@ from cldice_loss import *
 from metrics import compute_betti_numbers
 import collections
 from torch.utils.data import ConcatDataset
-from thesis_visualisation import *
+from visualizations.thesis_visualisation import *
 from plot_registration_steps import *
 
 # ----------------------------------------------------------------------

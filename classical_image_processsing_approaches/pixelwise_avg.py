@@ -65,7 +65,7 @@ def image_averaging(raw_images, threshold, normalised=False):
 
 
 
-def classical_approach(batch_directory,threshold):
+def classical_approach(batch_directory,threshold=0.401):
             
     cldice_total =0.0
     n_batches = 0

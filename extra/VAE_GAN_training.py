@@ -6,7 +6,7 @@ from torchvision.transforms import v2
 from input_pipeline import *
 from tqdm import tqdm
 from torchmetrics import StructuralSimilarityIndexMeasure
-from visualizations import *
+from visualizations.visualizations import *
 from torch.utils.tensorboard import SummaryWriter
 
 

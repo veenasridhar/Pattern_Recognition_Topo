@@ -1,0 +1,26 @@
+{
+  "train": [
+    "Anowas V4 Bottom",
+    "Anowas V4 Top",
+    "Front View V3",
+    "Intermediate Floor V3",
+    "Side View V3",
+    "gen WK Front",
+    "gen WK Side",
+    "gen WK Top",
+    "gn WK Bottom"
+  ],
+  "val": [
+    "Bottom View MW",
+    "Jermias Side",
+    "Rear View MW",
+    "Side View MW",
+    "Top View V3"
+  ],
+  "test": [
+    "Anowas V4 Side View",
+    "Bottom Inside View V3",
+    "Bottom View V3",
+    "Jermias_bottom"
+  ]
+}

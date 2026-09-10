@@ -2,7 +2,7 @@ import os
 
 import torch
 import torchvision
-from vae_latent_visualisation import *
+from extra.vae_latent_visualisation import *
 from image_processing_approach import *
 import cv2
 import numpy as np

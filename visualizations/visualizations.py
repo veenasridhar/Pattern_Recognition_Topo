@@ -10,8 +10,6 @@ import numpy as np
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import matplotlib.gridspec as gridspec
-from image_processing_approach import *
-from metrics import iou_metrics
 from scipy.ndimage.morphology import binary_dilation
 
 def extract_foreground_mask(image):

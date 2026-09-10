@@ -8,14 +8,14 @@ from diffusers import AutoencoderKL
 import torch.nn as nn
 from torchvision.transforms import v2
 from torchinfo import summary
-from cldice_vis import *
+from visualizations.cldice_vis import *
 #from input_pipeline_discrete import *
 from tqdm import tqdm
 from torchmetrics import StructuralSimilarityIndexMeasure
 import matplotlib.pyplot as plt
 import torchvision.models as models
-from thesis_visualisation import visualize_comparison_with_overlay
-from visualizations import *
+from visualizations.thesis_visualisation import visualize_comparison_with_overlay
+from visualizations.visualizations import *
 from attSets import AttSets
 from cldice_loss_vae import *
 

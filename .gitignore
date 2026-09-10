@@ -5,54 +5,5 @@ wandb/
 *.pth
 __pycache__/
 .idea/
-venv/
-/Compiled Results/
-/data/
-/eval_images_result/
-/feature_map/
-/finetuned_vae/
-/Image Processing Results/
-/Individual Reconstruction Results/
-/Latent_averaging_Results/
-/models/
-/output_files/
-/output_images_0/
-/Resdiual Convolutional Network Results/
-/Residual Conv Grayscale/
-/Residual Convolutional Network Results/
-/Residual Convolutional Network Results_1/
-/Residual Convolutional Network Results_25px reception field/
-/Residual Convolutional Network Results_only_sdf/
-/Residual Convolutional Network Results_sdf/
-/Results - Grayscale Images/
-/Results on 09-06/
-/Simple Convolutional Network Results/
-/Simple_Conv_Grayscale_output/
-/Simple_Conv_Grayscale_output_permuted/
-/Spatial Aggregation Results/
-/Skeletons_gt/
-/Results 15-06/
-/Residual Convolutional Network Results_1000/
-/Residual Convolutional Network Results_original size/
-/Median Output/
-/Learned Aggregation/
-/output_*
-/output_images_2/
-/output_images_3/
-/split_fold1.json
-/split_fold2.json
-/Residual *
-/output_images/
-/convolutional_network_chkpoint/
-/Residual Convolutional Network Results_original size_Fold 2/
-*.sh
-slurm-*
-secrets
-split_fold0_individual.json
-split_fold0.json
-split_fold1_individual.json
-split_fold2_individual.json
-split_fold3_individual.json
-split_fold0.json
-OpenTO_Consensus_Dataset_reduced_thickness_cldice/manifest.csv
-OpenTO_Consensus_Dataset_reduced_thickness_cldice/manifest1.csv
+.venv/
+.jsons

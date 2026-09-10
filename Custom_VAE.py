@@ -1,13 +1,14 @@
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from attSets import AttSets
+from logger import setup_logger
 import wandb
 from cldice_loss_vae import *
-from cldice_vis import *
-from visualizations import *
-from thesis_visualisation_binary import visualize_comparison_with_overlay,visualize_attsets_weights
-from models import CustomVAE,AttSets
+from visualizations.visualizations import *
+from visualizations.thesis_visualisation import *
+from models import *
 from tqdm import tqdm
 
 # ----------------------------------------------------------------------------
@@ -15,24 +16,8 @@ from tqdm import tqdm
 # ----------------------------------------------------------------------------
 CLS_VOID, CLS_MEMBER = 0, 1
 NUM_CLASSES = 2
-save_path = f'./Custom VAE Results Final/Custom VAE RailwayTO Consensus Reconstruction_{latent_technique}_{fold}_final'
+
 decoder_lr = 0.0001
-
-
-# def to_label_map(gray: torch.Tensor) -> torch.Tensor:
-#     """Grayscale {0,128,255} (any float/int tensor, [B,1,H,W] or [B,H,W])
-#     -> integer label map [B,H,W] via thresholds at 64 and 192."""
-#     if gray.dim() == 4:
-#         gray = gray.squeeze(1)
-#     labels = torch.full_like(gray, CLS_VOID, dtype=torch.long)
-#     labels[gray > 64] = CLS_MEMBER #CLS_NONDESIGN
-#     #labels[gray > 192] = CLS_MEMBER
-#     return labels
-
-
-# def labels_to_onehot(labels: torch.Tensor) -> torch.Tensor:
-#     """[B,H,W] long -> [B,3,H,W] float one-hot (VAE input)."""
-#     return F.one_hot(labels, NUM_CLASSES).permute(0, 3, 1, 2).float()
 
 class CustomVAE:
 
@@ -53,6 +38,8 @@ class CustomVAE:
 
         if self.multi_image_mode:
 
+            logger = setup_logger(name="finetune", log_file="logs/VAE_finetune.log", level=logging.INFO)
+            save_path = f'Custom VAE RailwayTO Consensus Reconstruction_{latent_technique}_{fold}_final'
             optimizer = torch.optim.AdamW(self.vae.decoder.parameters(), lr= decoder_lr) # weight_decay=1e-2
             if latent_technique == 'learned_aggregation':
                 aggregation_module_optimizer = torch.optim.AdamW(self.aggregation_module.parameters(), lr=lr)
@@ -100,7 +87,6 @@ class CustomVAE:
         # ce_loss = torch.nn.CrossEntropyLoss(weight= ce_weights)
         ce_loss = torch.nn.CrossEntropyLoss()
         best_loss = float('inf')
-        best_val_cldice = -(float('inf'))
 
         for epoch in range(epochs):
             
@@ -302,6 +288,8 @@ class CustomVAE:
                     optimizer.zero_grad()
                 
                 scheduler.step()
+                logger.info(f'Epoch %d | Train Loss: %.4f', epoch, train_vae_loss / len(train_loader))
+                
         
             ###################################
             ### Single Image Mode
@@ -452,7 +440,7 @@ class CustomVAE:
                             member_prob = probs[:, 1:2]
                             member_gt   = (target == 1).float().unsqueeze(1)
                             val_cldice_loss = cldice_loss(member_prob,member_gt)
-                            reconstruction_val_loss =  alpha* val_ce_loss + (1-alpha) * val_cldice_loss
+                            reconstruction_val_loss =  val_ce_loss +  val_cldice_loss
 
                             val_loss = reconstruction_val_loss
 
@@ -517,9 +505,12 @@ class CustomVAE:
                                 'Val reconstruction_loss': reconstruction_val_loss.item()
                             })
 
-                        epoch_cldice_dl = val_cldice_dl /len(val_loader.dataset)
-                        if epoch_cldice_dl >= best_val_cldice:
-                            best_val_cldice = epoch_cldice_dl
+
+                        logger.info(f'Epoch %d | Val Loss: %.4f', epoch, val_vae_loss / len(val_loader))    
+
+                        epoch_val_loss = val_total_cld_loss /len(val_loader)
+                        if epoch_val_loss <= best_loss:
+                            best_loss = epoch_val_loss
                             if not os.path.exists(save_path):
                                 os.mkdir(save_path)
                             if not os.path.exists(os.path.join(f'{save_path}/val')):
@@ -618,7 +609,7 @@ class CustomVAE:
                                 #'Val SSIM Loss': ssim_loss.item()
                             })
 
-            if epoch_cldice_dl >= best_val_cldice:
+            if epoch_val_loss <= best_loss:
                 test_vae_loss = 0.0
                 test_total_cld_loss = 0.0
                 test_total_ce_loss = 0.0
@@ -791,70 +782,72 @@ class CustomVAE:
                                     #'KL_loss': kl_test_loss.item(),
                                 })
 
+                            logger.info(f'Epoch %d | Test Loss: %.4f', epoch, test_vae_loss / len(test_loader))    
 
-                    else:
-                        for batch, (images,target) in enumerate(test_progress_bar):
 
-                            images = images.to(self.device)
-                            target = target.to(self.device)
+                        else:
+                            for batch, (images,target) in enumerate(test_progress_bar):
 
-                            mu, log_var = self.vae.encode(images)
-                           
-                            z =  self.vae.reparameterize(mu, log_var)         
+                                images = images.to(self.device)
+                                target = target.to(self.device)
+
+                                mu, log_var = self.vae.encode(images)
                             
-                            reconstructed = self.vae.decode(z)
+                                z =  self.vae.reparameterize(mu, log_var)         
+                                
+                                reconstructed = self.vae.decode(z)
 
-                            recon_loss = ce_loss(reconstructed,target)
-                            probs       = torch.softmax(reconstructed, dim=1)
-                            member_prob = probs[:, 1:2]
-                            member_gt   = (target == 1).float().unsqueeze(1)
-                            test_cldice_loss = cldice_loss(member_prob,member_gt)
-                            kl_loss = self.vae.kl_loss(mu, log_var)
+                                recon_loss = ce_loss(reconstructed,target)
+                                probs       = torch.softmax(reconstructed, dim=1)
+                                member_prob = probs[:, 1:2]
+                                member_gt   = (target == 1).float().unsqueeze(1)
+                                test_cldice_loss = cldice_loss(member_prob,member_gt)
+                                kl_loss = self.vae.kl_loss(mu, log_var)
 
-                            t_loss = recon_loss + kl_weight * kl_loss + test_cldice_loss
+                                t_loss = recon_loss + kl_weight * kl_loss + test_cldice_loss
 
-                            if epoch%10 == 0 :
-                                if not os.path.exists(os.path.join(save_path)):
-                                        os.mkdir(os.path.join(save_path))
-                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}')):
-                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}'))
-                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/test')):
-                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/test'))
-                                if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/test/Epoch {epoch}')):
-                                    os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/test/Epoch {epoch}'))
-                                reconstructed_image = torch.argmax(reconstructed, dim=1)
-                                if test_index <50:
-                                    visulaize_images_individual(batch,epoch, reconstructed_image, target,None, f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}',False)
+                                if epoch%10 == 0 :
+                                    if not os.path.exists(os.path.join(save_path)):
+                                            os.mkdir(os.path.join(save_path))
+                                    if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}')):
+                                        os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}'))
+                                    if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/test')):
+                                        os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/test'))
+                                    if not os.path.exists(os.path.join(save_path,f'individual_images_Fold {fold}/test/Epoch {epoch}')):
+                                        os.mkdir(os.path.join(save_path,f'individual_images_Fold {fold}/test/Epoch {epoch}'))
+                                    reconstructed_image = torch.argmax(reconstructed, dim=1)
+                                    if test_index <50:
+                                        visulaize_images_individual(batch,epoch, reconstructed_image, target,None, f'{save_path}/individual_images_Fold {fold}/test/Epoch {epoch}',False)
 
-                                test_index += 1
+                                    test_index += 1
 
-                            test_vae_loss += t_loss.item()
-                            test_mse_loss += recon_loss.item()
-                            test_kl_loss += kl_loss.item()
-                            test_cldice_loss += test_cldice_loss.item()
+                                test_vae_loss += t_loss.item()
+                                test_mse_loss += recon_loss.item()
+                                test_kl_loss += kl_loss.item()
+                                test_cldice_loss += test_cldice_loss.item()
 
-                            # Printing the step loss values in the progress bar
-                            test_progress_bar.set_postfix({
-                                'Test Total loss': t_loss.item(),
-                                'Test Reconstruction_loss': recon_loss.item(),
-                                'KL_loss': kl_loss.item(),
-                            })
+                                # Printing the step loss values in the progress bar
+                                test_progress_bar.set_postfix({
+                                    'Test Total loss': t_loss.item(),
+                                    'Test Reconstruction_loss': recon_loss.item(),
+                                    'KL_loss': kl_loss.item(),
+                                })
 
             
                 best_loss = epoch_cldice_dl
                 if self.multi_image_mode:
-                    torch.save(self.vae, f'./Custom VAE Results Final/Checkpoints/Custom_VAE_RailwayTO_common_structures_checkpoint_{latent_technique}_{fold}_final.pth')
+                    torch.save(self.vae, f'Custom_VAE_RailwayTO_common_structures_checkpoint_{latent_technique}_{fold}_final.pth')
                     #self.vae.save_pretrained(f'finetuned_vae/common_structures_recon_{latent_technique}')
                     if latent_technique == 'learned_aggregation':
                         torch.save({
                             'vae': self.vae,
                             'aggregation_module': self.aggregation_module,
-                        }, f'./Custom VAE Results Final/Checkpoints/Custom_VAE_RailwayTO_aggmodule_checkpoint_{latent_technique}_{fold}_final.pth')
+                        }, f'Custom_VAE_RailwayTO_aggmodule_checkpoint_{latent_technique}_{fold}_final.pth')
                 else:
-                    torch.save(self.vae,f'./Custom VAE Results Final/Checkpoints/Custom_VAE_RailwayTO dataset_individual_checkpoint_ce_cldice_{fold}.pth')
+                    torch.save(self.vae,f'Custom_VAE_RailwayTO dataset_individual_checkpoint_ce_cldice_{fold}.pth')
                     #self.vae.save_pretrained('finetuned_vae/individually_trained_models_ce_cldice')
 
-                print(f'Model Saved with best_loss: {best_loss:.4f}')
+                logger.info(f'Model Saved with best_loss: %.4f',best_loss)
 
             run.log({'fold':fold,'epoch':epoch,
                     'Train_Total_Loss': train_vae_loss / len(train_loader), 'Test_Total_Loss': test_vae_loss / len(test_loader), 'Val_Total_Loss': val_vae_loss/len(val_loader),

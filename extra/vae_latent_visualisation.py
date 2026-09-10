@@ -9,7 +9,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.manifold import TSNE
-from visualizations import *
+from visualizations.visualizations import *
 from eval_new_data import *
 
 class VAEGANFineTuner:

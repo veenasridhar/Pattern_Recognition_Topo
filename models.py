@@ -1,6 +1,8 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+NUM_CLASSES =2
 
 class simple_Conv(nn.Module):
 
@@ -119,7 +121,7 @@ class Decoder2x(nn.Module):
 # ----------------------------------------------------------------------------
 # Full VAE
 # ----------------------------------------------------------------------------
-class TOVae2x(nn.Module):
+class TOVAE(nn.Module):
     """VAE over 2-class TO label maps, 2x spatial compression.
     """
 

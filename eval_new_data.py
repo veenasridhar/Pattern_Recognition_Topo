@@ -2,8 +2,8 @@ import os
 import torchvision
 import torch.nn.functional as F
 
-from thesis_visualisation import visualize_comparison_with_overlay
-from vae_latent_visualisation import *
+from visualizations.thesis_visualisation import visualize_comparison_with_overlay
+from extra.vae_latent_visualisation import *
 from image_processing_approach import *
 import cv2
 import numpy as np

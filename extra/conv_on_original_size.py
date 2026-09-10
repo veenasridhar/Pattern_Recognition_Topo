@@ -18,7 +18,7 @@ from scipy.ndimage import distance_transform_edt
 from cldice_loss import *
 import collections
 from torch.utils.data import ConcatDataset
-from thesis_visualisation import *
+from visualizations.thesis_visualisation import *
 
 
 class simple_Conv(nn.Module):
